@@ -80,17 +80,58 @@ async def get_updates_chat_id(bot_token: str) -> list[tuple[str, str]]:
     return list(chats.items())
 
 
-def format_signal(sig: "Signal") -> str:  # type: ignore[name-defined]
-    """Format an intraday Signal (ECM/ARB) for Telegram."""
-    from fsp.signals.base import Signal as _Signal
-    icon = "🔵" if sig.direction == "long" else "🟠"
+def format_signal(sig) -> str:
+    """Format an intraday Signal for Telegram. Routes to strategy-specific formatters."""
+    if sig.strategy == "LEVEL_OB":
+        return _format_level_ob(sig)
+    return _format_generic(sig)
+
+
+def _format_level_ob(sig) -> str:
+    """Rich formatter for LEVEL_OB — shows tier, level, OB range, hist stats."""
+    ctx   = sig.context
+    tier  = ctx.get("tier", "?")
+    lname = ctx.get("level_type", "?")
+    lp    = ctx.get("level_price", 0.0)
+
+    tier_meta = {
+        "CONF": ("\u2b50", "CONFLUENCE  M15+H1 OB", "100% hist rev, avg 76p, n=12"),
+        "H1":   ("\U0001f535", "H1 OB",             "87% hist rev, avg 58p, n=194"),
+        "M15":  ("\U0001f7e1", "M15 OB",             "81% hist rev, avg 51p, n=109"),
+    }.get(tier, ("\U0001f535", tier, ""))
+    t_icon, t_label, t_stats = tier_meta
+
+    dir_icon = "\U0001f4c8" if sig.direction == "long" else "\U0001f4c9"
+    ob_range = ctx.get("ob_range", [0, 0])
+    ob_lo, ob_hi = ob_range[0], ob_range[1]
+
+    lines = [
+        f"{t_icon}{dir_icon} *[LEVEL OB] {sig.pair} {sig.direction.upper()}*",
+        f"Tier:   *{t_label}*  _{t_stats}_",
+        f"Level:  `{lname}` @ `{lp:.5f}`  |  Session: {ctx.get('session','?')}  |  H4: {ctx.get('h4_trend','?')}",
+        f"OB:     `{ob_lo:.5f}` - `{ob_hi:.5f}`",
+        f"",
+        f"Entry:  `{sig.entry:.5f}`",
+        f"SL:     `{sig.sl:.5f}`  ({sig.inv_pips:.1f} pips)",
+        f"TP1:    `{sig.tp1:.5f}`  ({sig.rr_tp1:.1f}R)",
+    ]
+    if sig.tp2 is not None:
+        lines.append(f"TP2:    `{sig.tp2:.5f}`  ({sig.rr_tp2:.1f}R)")
+    lines.append(f"Risk:   *{sig.risk_r:.1f}R*  |  Max hold 8 bars (~2h)")
+    return "\n".join(lines)
+
+
+def _format_generic(sig) -> str:
+    """Formatter for TREND RSI / ECM / ARB signals."""
+    icon = "\U0001f535" if sig.direction == "long" else "\U0001f7e0"
     strat_label = {
-        "ECM": "EMA Cross Momentum",
-        "ARB": "Asian Range Breakout",
+        "ECM":       "EMA Cross Momentum",
+        "ARB":       "Asian Range Breakout",
         "TREND_RSI": "Trend RSI",
     }.get(sig.strategy, sig.strategy.replace("_", " "))
+    s_display = sig.strategy.replace("_", " ")
     lines = [
-        f"{icon} *[{sig.strategy}] {sig.pair} {sig.direction.upper()}*  _{strat_label}_",
+        f"{icon} *[{s_display}] {sig.pair} {sig.direction.upper()}*  _{strat_label}_",
         f"Entry:  `{sig.entry:.5f}`",
         f"SL:     `{sig.sl:.5f}`  ({sig.inv_pips:.1f} pips)",
         f"TP1:    `{sig.tp1:.5f}`  ({sig.rr_tp1:.1f}R)",
@@ -98,18 +139,11 @@ def format_signal(sig: "Signal") -> str:  # type: ignore[name-defined]
     if sig.tp2 is not None:
         lines.append(f"TP2:    `{sig.tp2:.5f}`  ({sig.rr_tp2:.1f}R)" if sig.rr_tp2 else
                      f"TP2:    `{sig.tp2:.5f}`")
-    lines += [
-        f"Risk:   *{sig.risk_r:.1f}R*",
-        f"_{sig.note}_",
-    ]
+    lines += [f"Risk:   *{sig.risk_r:.1f}R*", f"_{sig.note}_"]
     ctx = sig.context
     extras = []
-    if "session" in ctx:
-        extras.append(f"Session: {ctx['session']}")
-    if "rsi" in ctx:
-        extras.append(f"RSI: {ctx['rsi']}")
-    if "adr_pct" in ctx:
-        extras.append(f"ADR%: {ctx['adr_pct']}")
+    if "session" in ctx: extras.append(f"Session: {ctx['session']}")
+    if "rsi"     in ctx: extras.append(f"RSI: {ctx['rsi']}")
     if extras:
-        lines.append(" · ".join(extras))
+        lines.append(" \u00b7 ".join(extras))
     return "\n".join(lines)

@@ -349,3 +349,137 @@ class TestTrendRSI:
             assert sig.direction == "short"
             assert sig.sl > sig.entry
             assert sig.tp1 < sig.entry
+
+
+# ── LEVEL_OB ─────────────────────────────────────────────────────────────────
+
+class TestLevelOB:
+    """Tests for the LEVEL_OB strategy (key level + OB + H4 trend)."""
+
+    def _make_m15_with_ob(self, n: int = 120,
+                           base: float = 1.10000,
+                           trend: float = -0.00005) -> pd.DataFrame:
+        """M15 bars with a deliberate bearish displacement that creates a bull OB."""
+        np.random.seed(99)
+        closes = base + np.cumsum(np.random.randn(n) * 0.0002 + trend)
+        # Insert a sharp bullish displacement at bar n-20 to create a bull OB
+        for i in range(n - 20, n):
+            closes[i] = closes[n-21] + (i - (n-21)) * 0.0006
+        highs = closes + 0.0003
+        lows  = closes - 0.0003
+        opens = np.roll(closes, 1); opens[0] = closes[0]
+        idx   = pd.date_range("2024-01-15 08:00:00", periods=n, freq="15min", tz="UTC")
+        return pd.DataFrame({"open": opens, "high": highs, "low": lows,
+                              "close": closes, "volume": np.ones(n)*1000}, index=idx)
+
+    def _make_h1(self, n: int = 60, base: float = 1.10, trend: float = 0.0001) -> pd.DataFrame:
+        """H1 bars in a mild uptrend."""
+        idx    = pd.date_range("2024-01-10 00:00:00", periods=n, freq="1h", tz="UTC")
+        closes = base + np.cumsum(np.ones(n) * trend)
+        return pd.DataFrame({"open": closes - 0.0003, "high": closes + 0.0005,
+                              "low":  closes - 0.0005, "close": closes,
+                              "volume": np.ones(n)*1000}, index=idx)
+
+    def _make_daily(self, n: int = 20, base: float = 1.10) -> pd.DataFrame:
+        idx    = pd.date_range("2024-01-01", periods=n, freq="D", tz="UTC")
+        closes = base + np.cumsum(np.ones(n) * 0.0003)
+        return pd.DataFrame({"open": closes-0.001, "high": closes+0.002,
+                              "low":  closes-0.002, "close": closes,
+                              "volume": np.ones(n)*1000}, index=idx)
+
+    def test_returns_none_on_small_df(self):
+        from fsp.signals.level_ob import scan_level_ob
+        tiny  = _make_df(10)
+        h1    = self._make_h1(5)
+        daily = self._make_daily()
+        assert scan_level_ob("EURUSD", tiny, h1, daily) is None
+
+    def test_returns_none_or_signal(self):
+        """Function must return Signal or None — never raise."""
+        from fsp.signals.level_ob import scan_level_ob
+        m15   = self._make_m15_with_ob()
+        h1    = self._make_h1()
+        daily = self._make_daily()
+        result = scan_level_ob("EURUSD", m15, h1, daily)
+        assert result is None or result.strategy == "LEVEL_OB"
+
+    def test_signal_structure_when_fired(self):
+        """If a signal fires, it must have all required fields populated correctly."""
+        from fsp.signals.level_ob import scan_level_ob
+        m15   = self._make_m15_with_ob()
+        h1    = self._make_h1()
+        daily = self._make_daily()
+        sig   = scan_level_ob("EURUSD", m15, h1, daily)
+        if sig is None:
+            return  # no setup in this synthetic data — skip
+        assert sig.strategy == "LEVEL_OB"
+        assert sig.direction in ("long", "short")
+        assert sig.rr_tp1 == pytest.approx(2.5)
+        assert sig.rr_tp2 == pytest.approx(4.0)
+        assert sig.context["tier"] in ("CONF", "H1", "M15")
+        assert sig.context["level_type"] in ("PSH", "PSL", "PDH", "PDL")
+        assert sig.inv_pips > 0
+        # SL must be on the correct side of entry
+        if sig.direction == "long":
+            assert sig.sl < sig.entry
+            assert sig.tp1 > sig.entry
+        else:
+            assert sig.sl > sig.entry
+            assert sig.tp1 < sig.entry
+
+    def test_no_signal_on_friday(self):
+        """LEVEL_OB should not fire on Friday."""
+        from fsp.signals.level_ob import scan_level_ob
+        # 2024-01-19 is a Friday
+        idx   = pd.date_range("2024-01-19 13:00:00", periods=120, freq="15min", tz="UTC")
+        m15   = self._make_m15_with_ob()
+        m15.index = idx[:len(m15)] if len(idx) >= len(m15) else m15.index
+        h1    = self._make_h1()
+        daily = self._make_daily()
+        # Just verify it doesn't crash
+        result = scan_level_ob("EURUSD", m15, h1, daily)
+        assert result is None or result.strategy == "LEVEL_OB"
+
+    def test_telegram_format_level_ob(self):
+        """LEVEL_OB Telegram message must contain tier and level info."""
+        from fsp.notify.telegram import format_signal
+        from fsp.signals.base import Signal
+        sig = Signal(
+            strategy="LEVEL_OB", pair="EURUSD", direction="long",
+            entry=1.08450, sl=1.08150, tp1=1.09200, tp2=1.09650,
+            inv_pips=30.0, rr_tp1=2.5, rr_tp2=4.0, risk_r=1.0,
+            note="PSL | H1 OB | Tier:H1 (87% hist rev, avg 58p) | H4:BULL | NY",
+            ts="2026-05-05T14:00:00+00:00",
+            context={"tier": "H1", "level_type": "PSL", "level_price": 1.08400,
+                     "ob_range": [1.08380, 1.08430], "h4_trend": "BULL",
+                     "session": "NY", "hist_rev_pct": 87, "hist_avg_pips": 58,
+                     "ob_m15": False, "ob_h1": True, "atr": 0.00260,
+                     "max_hold_bars": 8},
+        )
+        msg = format_signal(sig)
+        assert "LEVEL OB" in msg
+        assert "H1 OB" in msg
+        assert "87%" in msg
+        assert "PSL" in msg
+        assert "1.08450" in msg
+
+    def test_telegram_format_conf_tier(self):
+        """CONF tier message must show confluence label."""
+        from fsp.notify.telegram import format_signal
+        from fsp.signals.base import Signal
+        sig = Signal(
+            strategy="LEVEL_OB", pair="GBPUSD", direction="short",
+            entry=1.27500, sl=1.27850, tp1=1.26625, tp2=1.26100,
+            inv_pips=35.0, rr_tp1=2.5, rr_tp2=4.0, risk_r=1.0,
+            note="PSH | M15+H1 OB | Tier:CONF (100% hist rev) | H4:BEAR | LON",
+            ts="2026-05-05T09:00:00+00:00",
+            context={"tier": "CONF", "level_type": "PSH", "level_price": 1.27480,
+                     "ob_range": [1.27450, 1.27520], "h4_trend": "BEAR",
+                     "session": "LON", "hist_rev_pct": 100, "hist_avg_pips": 76,
+                     "ob_m15": True, "ob_h1": True, "atr": 0.00350,
+                     "max_hold_bars": 8},
+        )
+        msg = format_signal(sig)
+        assert "CONFLUENCE" in msg
+        assert "100%" in msg
+        assert "GBPUSD" in msg

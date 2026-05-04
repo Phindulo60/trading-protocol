@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
-StrategyName = Literal["ECM", "ARB"]  # EMA Cross Momentum, Asian Range Breakout
+StrategyName = Literal["ECM", "ARB", "TREND_RSI", "LEVEL_OB"]
 
 
 @dataclass
