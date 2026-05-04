@@ -1,0 +1,411 @@
+//@version=6
+// =============================================================================
+// 4-Step Protocol — Layer 1: Context Engine
+// -----------------------------------------------------------------------------
+// Auto-draws objective market structure for the 4-Step Trading Protocol:
+//   • Time-based LQ: PDH/L, PWH/L, PMH/L, Monday range, Daily/Weekly open
+//   • Session H/L: Asia, London, NY, NY-Lunch  (current + previous)
+//   • Price-based: FVGs (HTF+LTF), Order Blocks, strong/weak swings, EQH/EQL
+//   • Events: liquidity sweep (SFP), displacement, CIOF, session opens
+//   • Dashboard: session, ADR%, cycle guess, H1 OF bias, nearest LQ above/below
+//
+// Designed for EURUSD & GBPUSD, execution TF M5 / M15.
+// All times in "America/New_York" (change in inputs if you trade UK clock).
+// =============================================================================
+
+indicator("4-Step Protocol — Context Engine", overlay=true, max_lines_count=500, max_labels_count=500, max_boxes_count=500, max_bars_back=2000)
+
+// ---------- Inputs -----------------------------------------------------------
+grpTime   = "Sessions (exchange tz)"
+tz        = input.string("America/New_York", "Timezone", options=["America/New_York","Europe/London","UTC"], group=grpTime)
+asiaSess  = input.session("1800-0200", "Asia",   group=grpTime)   // 18:00-02:00 NY
+loSess    = input.session("0200-0500", "London (LO)", group=grpTime)
+nyAmSess  = input.session("0700-1200", "NY AM", group=grpTime)
+lunchSess = input.session("1200-1300", "NY Lunch", group=grpTime)
+nyPmSess  = input.session("1300-1600", "NY PM / LO Close", group=grpTime)
+
+grpLQ     = "Time-based Liquidity"
+showPD    = input.bool(true,  "PDH / PDL",          group=grpLQ)
+showPW    = input.bool(true,  "PWH / PWL",          group=grpLQ)
+showPM    = input.bool(false, "PMH / PML",          group=grpLQ)
+showMR    = input.bool(true,  "Monday Range",       group=grpLQ)
+showDWO   = input.bool(true,  "Daily / Weekly Open",group=grpLQ)
+showSess  = input.bool(true,  "Session H/L (cur+prev)", group=grpLQ)
+
+grpPX     = "Price-based Structure"
+showFVG   = input.bool(true,  "FVGs",               group=grpPX)
+fvgTF     = input.timeframe("60","FVG timeframe (blank=current)", group=grpPX)
+fvgMaxAge = input.int(80, "FVG max age (bars, 0=keep all)", minval=0, group=grpPX)
+showOB    = input.bool(true,  "Order Blocks",        group=grpPX)
+showSwing = input.bool(true,  "Strong/Weak Swings",  group=grpPX)
+swingLen  = input.int(5, "Swing pivot length", minval=2, group=grpPX)
+showEQ    = input.bool(true,  "EQH / EQL clusters",  group=grpPX)
+eqTol     = input.float(0.10, "EQH/L tolerance (ATR mult)", step=0.05, group=grpPX)
+
+grpEv     = "Event Detection"
+dispMult  = input.float(1.5, "Displacement ATR multiple", step=0.1, group=grpEv)
+alertSwp  = input.bool(true, "Alert on Liquidity Sweep", group=grpEv)
+alertDisp = input.bool(true, "Alert on Displacement",    group=grpEv)
+alertCIOF = input.bool(true, "Alert on CIOF",            group=grpEv)
+alertSO   = input.bool(true, "Alert on Session Open",    group=grpEv)
+
+grpUI     = "Dashboard"
+showDash  = input.bool(true, "Show dashboard",     group=grpUI)
+dashPos   = input.string("top_right","Position", options=["top_right","top_left","bottom_right","bottom_left"], group=grpUI)
+
+// ---------- Helpers ----------------------------------------------------------
+f_inSess(s) => not na(time(timeframe.period, s, tz))
+nyTime(t)   => time(timeframe.period, "0000-2359", tz)
+atr20       = ta.atr(20)
+
+// Session state
+inAsia  = f_inSess(asiaSess)
+inLO    = f_inSess(loSess)
+inNYam  = f_inSess(nyAmSess)
+inLunch = f_inSess(lunchSess)
+inNYpm  = f_inSess(nyPmSess)
+
+curSessStr = inAsia ? "ASIA" : inLO ? "LONDON" : inNYam ? "NY-AM" : inLunch ? "LUNCH" : inNYpm ? "NY-PM" : "—"
+
+// Session open triggers (first bar inside session)
+soAsia  = inAsia  and not inAsia[1]
+soLO    = inLO    and not inLO[1]
+soNYam  = inNYam  and not inNYam[1]
+soLunch = inLunch and not inLunch[1]
+soNYpm  = inNYpm  and not inNYpm[1]
+
+// ---------- Time-based LQ (PDH/L, PWH/L, PMH/L, opens, Monday range) ---------
+var line lnPDH = na
+var line lnPDL = na
+var line lnPWH = na
+var line lnPWL = na
+var line lnPMH = na
+var line lnPML = na
+var line lnDO  = na
+var line lnWO  = na
+var line lnMRH = na
+var line lnMRL = na
+
+pdh = request.security(syminfo.tickerid, "D", high[1], lookahead=barmerge.lookahead_on)
+pdl = request.security(syminfo.tickerid, "D", low[1],  lookahead=barmerge.lookahead_on)
+pwh = request.security(syminfo.tickerid, "W", high[1], lookahead=barmerge.lookahead_on)
+pwl = request.security(syminfo.tickerid, "W", low[1],  lookahead=barmerge.lookahead_on)
+pmh = request.security(syminfo.tickerid, "M", high[1], lookahead=barmerge.lookahead_on)
+pml = request.security(syminfo.tickerid, "M", low[1],  lookahead=barmerge.lookahead_on)
+dOpen = request.security(syminfo.tickerid, "D", open,  lookahead=barmerge.lookahead_on)
+wOpen = request.security(syminfo.tickerid, "W", open,  lookahead=barmerge.lookahead_on)
+
+f_extLine(ln, price, col, style, lbl) =>
+    if na(ln)
+        ln := line.new(bar_index-1, price, bar_index, price, color=col, style=style, extend=extend.right, width=1)
+    else
+        line.set_xy1(ln, bar_index-1, price)
+        line.set_xy2(ln, bar_index, price)
+        line.set_color(ln, col)
+    ln
+
+if showPD
+    lnPDH := f_extLine(lnPDH, pdh, color.new(color.red,40),    line.style_solid, "PDH")
+    lnPDL := f_extLine(lnPDL, pdl, color.new(color.green,40),  line.style_solid, "PDL")
+if showPW
+    lnPWH := f_extLine(lnPWH, pwh, color.new(color.red,20),    line.style_dashed, "PWH")
+    lnPWL := f_extLine(lnPWL, pwl, color.new(color.green,20),  line.style_dashed, "PWL")
+if showPM
+    lnPMH := f_extLine(lnPMH, pmh, color.new(color.maroon,20), line.style_dashed, "PMH")
+    lnPML := f_extLine(lnPML, pml, color.new(color.teal,20),   line.style_dashed, "PML")
+if showDWO
+    lnDO  := f_extLine(lnDO,  dOpen, color.new(color.yellow,30), line.style_dotted, "DO")
+    lnWO  := f_extLine(lnWO,  wOpen, color.new(color.orange,30), line.style_dotted, "WO")
+
+// Monday range: track H/L while DOW==Monday (in exchange tz)
+var float mrH = na
+var float mrL = na
+var int   mrDay = na
+isMon = dayofweek(time, tz) == dayofweek.monday
+newDay = dayofweek(time, tz) != dayofweek(time[1], tz)
+if isMon
+    if newDay or na(mrH)
+        mrH := high
+        mrL := low
+        mrDay := dayofmonth(time, tz)
+    else
+        mrH := math.max(mrH, high)
+        mrL := math.min(mrL, low)
+if showMR and not na(mrH)
+    lnMRH := f_extLine(lnMRH, mrH, color.new(color.purple,30), line.style_solid, "MRH")
+    lnMRL := f_extLine(lnMRL, mrL, color.new(color.purple,30), line.style_solid, "MRL")
+
+// ---------- Session H/L (current + previous) ---------------------------------
+// Track live H/L per session, snapshot when session ends.
+var float aH  = na
+var float aL  = na
+var float aPH = na
+var float aPL = na
+var float loH = na
+var float loL = na
+var float loPH = na
+var float loPL = na
+var float nyH = na
+var float nyL = na
+var float nyPH = na
+var float nyPL = na
+var float luH = na
+var float luL = na
+var float luPH = na
+var float luPL = na
+
+f_sessTrack(inS, prevIn, curH, curL, prevH, prevL) =>
+    nH = curH
+    nL = curL
+    nPH = prevH
+    nPL = prevL
+    if inS and not prevIn
+        nH := high
+        nL := low
+    else if inS
+        nH := math.max(curH, high)
+        nL := math.min(curL, low)
+    if prevIn and not inS
+        nPH := curH
+        nPL := curL
+    [nH, nL, nPH, nPL]
+
+[aH2,aL2,aPH2,aPL2]     = f_sessTrack(inAsia,  inAsia[1],  aH, aL, aPH, aPL)
+aH  := aH2
+aL  := aL2
+aPH := aPH2
+aPL := aPL2
+[loH2,loL2,loPH2,loPL2] = f_sessTrack(inLO,    inLO[1],    loH, loL, loPH, loPL)
+loH  := loH2
+loL  := loL2
+loPH := loPH2
+loPL := loPL2
+[nyH2,nyL2,nyPH2,nyPL2] = f_sessTrack(inNYam,  inNYam[1],  nyH, nyL, nyPH, nyPL)
+nyH  := nyH2
+nyL  := nyL2
+nyPH := nyPH2
+nyPL := nyPL2
+[luH2,luL2,luPH2,luPL2] = f_sessTrack(inLunch, inLunch[1], luH, luL, luPH, luPL)
+luH  := luH2
+luL  := luL2
+luPH := luPH2
+luPL := luPL2
+
+var line lnAH  = na
+var line lnAL  = na
+var line lnLOH = na
+var line lnLOL = na
+var line lnNYH = na
+var line lnNYL = na
+var line lnLUH = na
+var line lnLUL = na
+if showSess
+    if not na(aH)
+        lnAH  := f_extLine(lnAH,  aH,  color.new(color.aqua,50),   line.style_dotted, "AsiaH")
+    if not na(aL)
+        lnAL  := f_extLine(lnAL,  aL,  color.new(color.aqua,50),   line.style_dotted, "AsiaL")
+    if not na(loH)
+        lnLOH := f_extLine(lnLOH, loH, color.new(color.blue,40),   line.style_dotted, "LOH")
+    if not na(loL)
+        lnLOL := f_extLine(lnLOL, loL, color.new(color.blue,40),   line.style_dotted, "LOL")
+    if not na(nyH)
+        lnNYH := f_extLine(lnNYH, nyH, color.new(color.orange,40), line.style_dotted, "NYH")
+    if not na(nyL)
+        lnNYL := f_extLine(lnNYL, nyL, color.new(color.orange,40), line.style_dotted, "NYL")
+    if not na(luH)
+        lnLUH := f_extLine(lnLUH, luH, color.new(color.gray,40),   line.style_dotted, "LunchH")
+    if not na(luL)
+        lnLUL := f_extLine(lnLUL, luL, color.new(color.gray,40),   line.style_dotted, "LunchL")
+
+// ---------- FVG detection (HTF optional) -------------------------------------
+// Bullish FVG: low[0] > high[2]  (gap between candle-2 high and candle-0 low)
+// Bearish FVG: high[0] < low[2]
+useHTF = fvgTF != "" and fvgTF != timeframe.period
+[fH0, fL0, fH2, fL2] = request.security(syminfo.tickerid, useHTF ? fvgTF : timeframe.period, [high, low, high[2], low[2]], lookahead=barmerge.lookahead_off)
+
+bullFVG = fL0 > fH2
+bearFVG = fH0 < fL2
+
+var box[] fvgBoxes = array.new<box>()
+if showFVG and bullFVG
+    b = box.new(bar_index-2, fL0, bar_index, fH2, bgcolor=color.new(color.green,85), border_color=color.new(color.green,60))
+    array.push(fvgBoxes, b)
+if showFVG and bearFVG
+    b = box.new(bar_index-2, fL2, bar_index, fH0, bgcolor=color.new(color.red,85), border_color=color.new(color.red,60))
+    array.push(fvgBoxes, b)
+
+// Extend right edge + age out
+if array.size(fvgBoxes) > 0
+    for i = array.size(fvgBoxes)-1 to 0
+        b = array.get(fvgBoxes, i)
+        box.set_right(b, bar_index+1)
+        if fvgMaxAge > 0 and bar_index - box.get_left(b) > fvgMaxAge
+            box.delete(b)
+            array.remove(fvgBoxes, i)
+
+// ---------- Swings: strong vs weak -------------------------------------------
+// Pivot high/low; "strong" if it took out the prior opposing swing's liquidity
+// before forming (i.e. prior swing low was broken before this pivot high).
+ph = ta.pivothigh(high, swingLen, swingLen)
+pl = ta.pivotlow(low,  swingLen, swingLen)
+
+var float lastPH       = na
+var int   lastPHbar    = na
+var float lastPL       = na
+var int   lastPLbar    = na
+var bool  lastPHstrong = na
+var bool  lastPLstrong = na
+var float prevSwingLow  = na
+var float prevSwingHigh = na
+
+if not na(ph)
+    // was prior swing low broken since it formed?
+    tookLiq = not na(prevSwingLow) and ta.lowest(low, bar_index - nz(lastPLbar, bar_index)) < prevSwingLow
+    lastPH := ph
+    lastPHbar := bar_index[swingLen]
+    lastPHstrong := tookLiq
+    prevSwingHigh := ph
+    if showSwing
+        label.new(bar_index[swingLen], ph, tookLiq ? "SH" : "wh", yloc=yloc.abovebar, style=label.style_label_down, color=tookLiq ? color.new(color.red,30) : color.new(color.red,70), textcolor=color.white, size=size.tiny)
+
+if not na(pl)
+    tookLiq = not na(prevSwingHigh) and ta.highest(high, bar_index - nz(lastPHbar, bar_index)) > prevSwingHigh
+    lastPL := pl
+    lastPLbar := bar_index[swingLen]
+    lastPLstrong := tookLiq
+    prevSwingLow := pl
+    if showSwing
+        label.new(bar_index[swingLen], pl, tookLiq ? "SL" : "wl", yloc=yloc.belowbar, style=label.style_label_up, color=tookLiq ? color.new(color.green,30) : color.new(color.green,70), textcolor=color.white, size=size.tiny)
+
+// ---------- Order Blocks -----------------------------------------------------
+// Bullish OB: last down-close candle before a displacement up candle
+// Bearish OB: last up-close candle before a displacement down candle
+bodySize = math.abs(close - open)
+dispUp   = close > open and bodySize > dispMult * atr20 and close > high[1]
+dispDn   = close < open and bodySize > dispMult * atr20 and close < low[1]
+
+var box[] obBoxes = array.new<box>()
+if showOB and dispUp and close[1] < open[1]
+    obTop = high[1]
+    obBot = low[1]
+    b = box.new(bar_index-1, obTop, bar_index+10, obBot, bgcolor=color.new(color.green,80), border_color=color.new(color.green,40), text="OB+", text_color=color.white, text_size=size.tiny)
+    array.push(obBoxes, b)
+if showOB and dispDn and close[1] > open[1]
+    obTop = high[1]
+    obBot = low[1]
+    b = box.new(bar_index-1, obTop, bar_index+10, obBot, bgcolor=color.new(color.red,80), border_color=color.new(color.red,40), text="OB-", text_color=color.white, text_size=size.tiny)
+    array.push(obBoxes, b)
+
+// ---------- EQH / EQL --------------------------------------------------------
+eqTolPx = eqTol * atr20
+eqH = not na(lastPH) and not na(ph) and math.abs(ph - lastPH) <= eqTolPx
+eqL = not na(lastPL) and not na(pl) and math.abs(pl - lastPL) <= eqTolPx
+if showEQ and eqH
+    line.new(lastPHbar, lastPH, bar_index[swingLen], ph, color=color.new(color.red,30), style=line.style_dashed, width=1)
+if showEQ and eqL
+    line.new(lastPLbar, lastPL, bar_index[swingLen], pl, color=color.new(color.green,30), style=line.style_dashed, width=1)
+
+// ---------- Events: Sweep, Displacement, CIOF --------------------------------
+// Sweep: wick pierces tracked level, body closes back inside.
+f_sweepUp(lvl) => not na(lvl) and high > lvl and close < lvl
+f_sweepDn(lvl) => not na(lvl) and low  < lvl and close > lvl
+
+sweepUp = f_sweepUp(pdh) or f_sweepUp(pwh) or f_sweepUp(aH) or f_sweepUp(loH) or f_sweepUp(nyH)
+sweepDn = f_sweepDn(pdl) or f_sweepDn(pwl) or f_sweepDn(aL) or f_sweepDn(loL) or f_sweepDn(nyL)
+
+if sweepUp
+    label.new(bar_index, high, "SFP", yloc=yloc.abovebar, style=label.style_label_down, color=color.new(color.orange,10), textcolor=color.white, size=size.small)
+if sweepDn
+    label.new(bar_index, low, "SFP", yloc=yloc.belowbar, style=label.style_label_up, color=color.new(color.orange,10), textcolor=color.white, size=size.small)
+
+// Displacement marker
+plotshape(dispUp, title="Disp Up", style=shape.triangleup, location=location.belowbar, color=color.new(color.lime,0), size=size.tiny)
+plotshape(dispDn, title="Disp Dn", style=shape.triangledown, location=location.abovebar, color=color.new(color.red,0), size=size.tiny)
+
+// CIOF: close through last opposite-sided structure (simplified: close through last weak high/low)
+ciofUp = not na(lastPH) and close > lastPH and close[1] <= lastPH and dispUp
+ciofDn = not na(lastPL) and close < lastPL and close[1] >= lastPL and dispDn
+
+if ciofUp
+    label.new(bar_index, low, "CIOF↑", yloc=yloc.belowbar, style=label.style_label_up, color=color.new(color.teal,0), textcolor=color.white, size=size.small)
+if ciofDn
+    label.new(bar_index, high, "CIOF↓", yloc=yloc.abovebar, style=label.style_label_down, color=color.new(color.maroon,0), textcolor=color.white, size=size.small)
+
+// ---------- Market cycle & H1 OF bias ---------------------------------------
+// Cycle: expansion if ATR(5) > ATR(50); consolidation if range(20) < 0.7*ADR
+adr5 = request.security(syminfo.tickerid, "D", ta.sma(high - low, 5), lookahead=barmerge.lookahead_on)
+rng20 = ta.highest(high,20) - ta.lowest(low,20)
+todayRange = request.security(syminfo.tickerid, "D", high - low, lookahead=barmerge.lookahead_on)
+adrPct = adr5 > 0 ? todayRange / adr5 * 100 : 0.0
+
+atrFast = ta.atr(5)
+atrSlow = ta.atr(50)
+cycle   = atrFast > atrSlow * 1.15 ? "EXPANSION" : atrFast < atrSlow * 0.85 ? "CONSOLIDATION" : "NEUTRAL"
+
+// H1 OF bias: structure of H1 closes vs H1 swings (simple proxy)
+h1Close = request.security(syminfo.tickerid, "60", close, lookahead=barmerge.lookahead_off)
+h1PH    = request.security(syminfo.tickerid, "60", ta.pivothigh(high,3,3), lookahead=barmerge.lookahead_off)
+h1PL    = request.security(syminfo.tickerid, "60", ta.pivotlow(low,3,3),  lookahead=barmerge.lookahead_off)
+var float h1LastPH = na
+var float h1LastPL = na
+if not na(h1PH)
+    h1LastPH := h1PH
+if not na(h1PL)
+    h1LastPL := h1PL
+h1Bias = not na(h1LastPH) and not na(h1LastPL) ? (h1Close > h1LastPH ? "BULL" : h1Close < h1LastPL ? "BEAR" : "NEUTRAL") : "—"
+
+// Nearest LQ above/below current price
+f_nearAbove(arr) =>
+    best = 1e20
+    for v in arr
+        if not na(v) and v > close and v < best
+            best := v
+    best == 1e20 ? na : best
+f_nearBelow(arr) =>
+    best = -1e20
+    for v in arr
+        if not na(v) and v < close and v > best
+            best := v
+    best == -1e20 ? na : best
+
+lqArr = array.from(pdh, pdl, pwh, pwl, aH, aL, loH, loL, nyH, nyL, mrH, mrL)
+nearAbove = f_nearAbove(lqArr)
+nearBelow = f_nearBelow(lqArr)
+
+// ---------- Dashboard --------------------------------------------------------
+var table dash = na
+if showDash and barstate.islast
+    pos = dashPos == "top_left" ? position.top_left : dashPos == "bottom_right" ? position.bottom_right : dashPos == "bottom_left" ? position.bottom_left : position.top_right
+    if na(dash)
+        dash := table.new(pos, 2, 7, bgcolor=color.new(color.black,20), border_width=1, border_color=color.gray)
+    table.cell(dash, 0, 0, "Session",   text_color=color.white, bgcolor=color.new(color.blue,60))
+    table.cell(dash, 1, 0, curSessStr,  text_color=color.yellow)
+    table.cell(dash, 0, 1, "Cycle",     text_color=color.white, bgcolor=color.new(color.blue,60))
+    table.cell(dash, 1, 1, cycle,       text_color=cycle=="EXPANSION"?color.lime:cycle=="CONSOLIDATION"?color.orange:color.gray)
+    table.cell(dash, 0, 2, "H1 OF",     text_color=color.white, bgcolor=color.new(color.blue,60))
+    table.cell(dash, 1, 2, h1Bias,      text_color=h1Bias=="BULL"?color.lime:h1Bias=="BEAR"?color.red:color.gray)
+    table.cell(dash, 0, 3, "ADR%",      text_color=color.white, bgcolor=color.new(color.blue,60))
+    table.cell(dash, 1, 3, str.tostring(adrPct, "#.0") + "%", text_color=adrPct>100?color.red:adrPct>70?color.orange:color.lime)
+    table.cell(dash, 0, 4, "LQ Above",  text_color=color.white, bgcolor=color.new(color.blue,60))
+    table.cell(dash, 1, 4, na(nearAbove)?"—":str.tostring(nearAbove, format.mintick), text_color=color.aqua)
+    table.cell(dash, 0, 5, "LQ Below",  text_color=color.white, bgcolor=color.new(color.blue,60))
+    table.cell(dash, 1, 5, na(nearBelow)?"—":str.tostring(nearBelow, format.mintick), text_color=color.aqua)
+    table.cell(dash, 0, 6, "Last Swing",text_color=color.white, bgcolor=color.new(color.blue,60))
+    lastSw = not na(lastPHbar) and (na(lastPLbar) or lastPHbar > lastPLbar) ? (lastPHstrong ? "Strong High" : "Weak High") : not na(lastPLbar) ? (lastPLstrong ? "Strong Low" : "Weak Low") : "—"
+    table.cell(dash, 1, 6, lastSw, text_color=color.white)
+
+// ---------- Alerts -----------------------------------------------------------
+if alertSwp and sweepUp
+    alert("4SP | Sweep UP on " + syminfo.ticker + " @ " + str.tostring(close), alert.freq_once_per_bar_close)
+if alertSwp and sweepDn
+    alert("4SP | Sweep DOWN on " + syminfo.ticker + " @ " + str.tostring(close), alert.freq_once_per_bar_close)
+if alertDisp and dispUp
+    alert("4SP | Displacement UP on " + syminfo.ticker, alert.freq_once_per_bar_close)
+if alertDisp and dispDn
+    alert("4SP | Displacement DOWN on " + syminfo.ticker, alert.freq_once_per_bar_close)
+if alertCIOF and ciofUp
+    alert("4SP | CIOF ↑ on " + syminfo.ticker, alert.freq_once_per_bar_close)
+if alertCIOF and ciofDn
+    alert("4SP | CIOF ↓ on " + syminfo.ticker, alert.freq_once_per_bar_close)
+if alertSO and (soAsia or soLO or soNYam or soLunch or soNYpm)
+    alert("4SP | Session open: " + curSessStr + " on " + syminfo.ticker, alert.freq_once_per_bar)
