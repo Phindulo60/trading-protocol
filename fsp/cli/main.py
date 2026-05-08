@@ -305,12 +305,13 @@ def telegram_setup():
 def live_cmd(
     pairs: str = typer.Option("EURUSD,GBPUSD,USDJPY,AUDUSD,USDCAD,EURJPY,GBPJPY", help="Comma-separated"),
     ltf: str = typer.Option("M15"),
-    feed: str = typer.Option("duka"),
+    feed: str = typer.Option("duka", help="duka | yf | td (Twelve Data live)"),
     interval: int = typer.Option(300, help="Seconds between scans (default 5 min)"),
     min_grade: str = typer.Option("B", help="A+ | A | B"),
     equity: float = typer.Option(10_000.0),
     risk_pct: float = typer.Option(0.005),
     dry: bool = typer.Option(False, help="Don't send Telegram, just print"),
+    llm: bool = typer.Option(False, help="Enable LLM signal validation via Bedrock"),
 ):
     """Run the always-on signal monitor. Sends Telegram alerts on qualifying setups."""
     import asyncio
@@ -319,7 +320,7 @@ def live_cmd(
     mg = grade_map[min_grade]
     pair_list = [p.strip().upper() for p in pairs.split(",") if p.strip()]
     try:
-        asyncio.run(live_loop(pair_list, ltf, feed, interval, mg, equity, risk_pct, dry))
+        asyncio.run(live_loop(pair_list, ltf, feed, interval, mg, equity, risk_pct, dry, use_llm=llm))
     except KeyboardInterrupt:
         print("\n[yellow]stopped[/]")
 

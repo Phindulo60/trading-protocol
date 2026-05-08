@@ -18,6 +18,24 @@ from fsp.signals.scanner import scan_pair_live
 log = logging.getLogger("fsp.live")
 
 
+# ── LLM Validator (lazy-loaded) ──────────────────────────────────────────────
+_validator = None
+
+
+def _get_validator():
+    """Lazy-init the Bedrock signal validator."""
+    global _validator
+    if _validator is None:
+        try:
+            from fsp.llm.validator import SignalValidator
+            _validator = SignalValidator()
+            log.info("LLM signal validator initialised (Bedrock)")
+        except Exception as e:
+            log.warning("LLM validator unavailable: %s", e)
+            _validator = False  # sentinel: tried and failed
+    return _validator if _validator else None
+
+
 # ── 4SP helpers ──────────────────────────────────────────────────────────────
 
 def _dedup_key(s: SetupCandidate) -> str:
@@ -53,7 +71,8 @@ async def _grade_once(pair: str, ltf: str, feed_kind: str, equity: float,
 
 async def live_loop(pairs: list[str], ltf: str, feed_kind: str,
                     interval_sec: int, min_grade: Grade,
-                    equity: float, risk_pct: float, dry: bool):
+                    equity: float, risk_pct: float, dry: bool,
+                    use_llm: bool = False):
     cfg = load_cfg()
     tg_cfg = cfg.get("telegram", {})
     tg = None
@@ -118,8 +137,35 @@ async def live_loop(pairs: list[str], ltf: str, feed_kind: str,
                           f"{'(dup)' if repeat_sig else ''}")
 
                     if not repeat_sig and not dry and tg:
-                        ok = await tg.send(format_signal(sig))
-                        log_intraday_signal(sig, dk, sent=ok)
+                        # LLM validation gate
+                        llm_decision = "TAKE"
+                        if use_llm:
+                            v = _get_validator()
+                            if v:
+                                try:
+                                    result = v.validate(
+                                        pair=pair,
+                                        direction=sig.direction,
+                                        strategy=sig.strategy,
+                                        entry=sig.entry,
+                                        sl=sig.sl,
+                                        tp=sig.tp1,
+                                    )
+                                    llm_decision = result.decision
+                                    print(f"  [dim]LLM: {result.decision} "
+                                          f"({result.confidence:.0%}) — "
+                                          f"{result.reason}[/]")
+                                except Exception as e:
+                                    log.warning("LLM validation error: %s", e)
+
+                        if llm_decision == "SKIP":
+                            log_intraday_signal(sig, dk, sent=False)
+                        else:
+                            msg = format_signal(sig)
+                            if llm_decision == "REDUCE":
+                                msg += "\n⚠️ LLM: REDUCE (half size)"
+                            ok = await tg.send(msg)
+                            log_intraday_signal(sig, dk, sent=ok)
                     else:
                         log_intraday_signal(sig, dk, sent=False)
 

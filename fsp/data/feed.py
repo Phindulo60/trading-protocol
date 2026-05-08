@@ -161,9 +161,27 @@ class YFinanceFeed:
         return df.tail(lookback_bars)
 
 
-def default_feed(kind: str = "duka") -> DataFeed:
+def default_feed(kind: str = "duka", **kwargs) -> DataFeed:
     if kind == "duka":
         return DukascopyFeed()
     if kind == "yf":
         return YFinanceFeed()
-    raise ValueError(kind)
+    if kind == "td":
+        from .twelve import TwelveDataFeed
+        api_key = kwargs.get("api_key") or _load_td_key()
+        return TwelveDataFeed(api_key)
+    raise ValueError(f"Unknown feed kind: {kind!r}. Use: duka, yf, td")
+
+
+def _load_td_key() -> str:
+    """Load Twelve Data API key from ~/.fsp/config.toml."""
+    import tomllib
+    cfg_path = Path.home() / ".fsp" / "config.toml"
+    if not cfg_path.exists():
+        raise RuntimeError("No [twelve_data] api_key in ~/.fsp/config.toml")
+    with open(cfg_path, "rb") as f:
+        cfg = tomllib.load(f)
+    key = cfg.get("twelve_data", {}).get("api_key")
+    if not key:
+        raise RuntimeError("No [twelve_data] api_key in ~/.fsp/config.toml")
+    return key
