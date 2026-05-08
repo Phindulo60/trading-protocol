@@ -180,7 +180,7 @@ data "aws_subnets" "default" {
 
 resource "aws_security_group" "fsp" {
   name        = "${var.project}-sg"
-  description = "FSP signal engine — outbound only"
+  description = "FSP signal engine - outbound only"
   vpc_id      = data.aws_vpc.default.id
 
   # Outbound: HTTPS (APIs), Telegram
