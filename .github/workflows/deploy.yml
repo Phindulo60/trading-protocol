@@ -6,7 +6,7 @@ on:
     paths-ignore:
       - '*.md'
       - 'docs/**'
-  workflow_dispatch:  # manual trigger from GitHub UI
+  workflow_dispatch:
 
 env:
   AWS_REGION: us-east-1
@@ -20,19 +20,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
       - name: Install uv
         uses: astral-sh/setup-uv@v4
 
-      - name: Run tests
+      - name: Install dependencies and run tests
         run: |
+          uv venv
           uv sync --dev
-          uv run pytest fsp/tests/ -q
+          uv run pytest fsp/tests/ -q --tb=short
 
   deploy:
     needs: test
     runs-on: ubuntu-latest
     permissions:
-      id-token: write   # OIDC for AWS auth
+      id-token: write
       contents: read
 
     steps:
