@@ -106,7 +106,11 @@ async def live_loop(pairs: list[str], ltf: str, feed_kind: str,
                     dk = sig.dedup_key
                     last_sig = last_signal_dedup_key(pair, minutes=120,
                                                      strategy=sig.strategy)
-                    repeat_sig = dk == last_sig
+                    # Compare pair|strategy|direction only — ignore entry price
+                    # (entry changes every bar but it is still the same setup)
+                    dk_core   = "|".join(dk.split("|")[:3])
+                    last_core = "|".join(last_sig.split("|")[:3]) if last_sig else ""
+                    repeat_sig = dk_core == last_core
 
                     print(f"{t0:%H:%M:%S} [bold]{pair}[/] [{sig.strategy}] "
                           f"{sig.direction.upper()} entry={sig.entry:.5f} "
