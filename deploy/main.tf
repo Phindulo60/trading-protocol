@@ -183,19 +183,11 @@ resource "aws_security_group" "fsp" {
   description = "FSP signal engine - outbound only"
   vpc_id      = data.aws_vpc.default.id
 
-  # Outbound: HTTPS (APIs), Telegram
+  # Allow all outbound (ECS agent needs access to ECR, Secrets Manager, CloudWatch, etc.)
   egress {
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  # DNS
-  egress {
-    from_port   = 53
-    to_port     = 53
-    protocol    = "udp"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
 }
