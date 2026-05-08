@@ -153,21 +153,29 @@ def update_outcome(signal_id: int, outcome: str,
         )
 
 
-def unresolved_signals(strategy: str = "TREND_RSI") -> list[dict]:
-    """Return all signals without an outcome yet."""
+def unresolved_signals(strategy: str | None = "TREND_RSI") -> list[dict]:
+    """Return all signals without an outcome yet. strategy=None returns all."""
     with conn() as c:
         migrate(c)
-        rows = c.execute(
-            "SELECT id, ts, pair, direction, entry, sl, tp1, rr_tp1, context_json "
-            "FROM intraday_signals "
-            "WHERE outcome IS NULL AND strategy=? "
-            "ORDER BY ts ASC",
-            (strategy,),
-        ).fetchall()
+        if strategy is not None:
+            rows = c.execute(
+                "SELECT id, ts, pair, strategy, direction, entry, sl, tp1, rr_tp1, context_json "
+                "FROM intraday_signals "
+                "WHERE outcome IS NULL AND strategy=? "
+                "ORDER BY ts ASC",
+                (strategy,),
+            ).fetchall()
+        else:
+            rows = c.execute(
+                "SELECT id, ts, pair, strategy, direction, entry, sl, tp1, rr_tp1, context_json "
+                "FROM intraday_signals "
+                "WHERE outcome IS NULL "
+                "ORDER BY ts ASC",
+            ).fetchall()
     return [
-        {"id": r[0], "ts": r[1], "pair": r[2], "direction": r[3],
-         "entry": r[4], "sl": r[5], "tp1": r[6], "rr_tp1": r[7],
-         "context": __import__("json").loads(r[8] or "{}")}
+        {"id": r[0], "ts": r[1], "pair": r[2], "strategy": r[3], "direction": r[4],
+         "entry": r[5], "sl": r[6], "tp1": r[7], "rr_tp1": r[8],
+         "context": __import__("json").loads(r[9] or "{}")}
         for r in rows
     ]
 

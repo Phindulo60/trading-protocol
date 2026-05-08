@@ -20,7 +20,8 @@ from fsp.journal.db import unresolved_signals, update_outcome
 
 log = logging.getLogger("fsp.resolver")
 
-MAX_HOLD = 8        # M15 bars — matches strategy context['max_hold_bars']
+# Default max hold per strategy (M15 bars)
+_DEFAULT_HOLD = {"TREND_RSI": 8, "LEVEL_OB": 8, "ECM": 32, "ARB": 12}
 FETCH_DAYS = 3      # days of M15 data to fetch per signal (covers the hold window)
 
 
@@ -41,7 +42,9 @@ def _resolve_one(sig: dict, m15: pd.DataFrame) -> tuple[str, float, str] | None:
     sig_ts = pd.Timestamp(sig["ts"]).tz_localize("UTC") if not sig["ts"].endswith("+00:00") \
              else pd.Timestamp(sig["ts"])
     # Find bars strictly after the signal bar
-    future = m15[m15.index > sig_ts].head(MAX_HOLD)
+    max_hold = sig.get("context", {}).get("max_hold_bars",
+                  _DEFAULT_HOLD.get(sig.get("strategy", ""), 16))
+    future = m15[m15.index > sig_ts].head(max_hold)
     if future.empty:
         return None  # data not yet available (signal too recent)
 
@@ -82,10 +85,11 @@ def _resolve_one(sig: dict, m15: pd.DataFrame) -> tuple[str, float, str] | None:
 
 def resolve_all(verbose: bool = False) -> dict[str, int]:
     """
-    Resolve all unresolved TREND_RSI signals in the journal.
+    Resolve all unresolved signals (TREND_RSI, LEVEL_OB, ECM, ARB) in the journal.
     Returns counts: {'resolved': N, 'skipped': M, 'errors': K}
     """
-    signals = unresolved_signals("TREND_RSI")
+    # Resolve ALL strategies (not just TREND_RSI)
+    signals = unresolved_signals(None)
     if not signals:
         return {"resolved": 0, "skipped": 0, "errors": 0}
 
