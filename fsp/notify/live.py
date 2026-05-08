@@ -85,38 +85,49 @@ async def live_loop(pairs: list[str], ltf: str, feed_kind: str,
     grade_rank = {Grade.SKIP: 0, Grade.B: 1, Grade.A: 2, Grade.A_PLUS: 3}
     min_rank = grade_rank[min_grade]
 
+    # Skip 4SP grader if using rate-limited feed (saves ~18 API calls/cycle)
+    skip_4sp = feed_kind == "td"
+
     print(f"[cyan]fsp live[/] · pairs={pairs} ltf={ltf} interval={interval_sec}s "
-          f"min_grade={min_grade.value} dry={dry}")
-    print("[dim]Running: 4-Step Protocol grader + EMA Cross Momentum + Asian Range Breakout[/]")
+          f"min_grade={min_grade.value} dry={dry} llm={use_llm}")
+    if skip_4sp:
+        print("[dim]Running: intraday scanner only (4SP skipped - rate-limited feed)[/]")
+    else:
+        print("[dim]Running: 4-Step Protocol grader + intraday scanner[/]")
 
     while True:
         t0 = datetime.now(timezone.utc)
 
         for pair in pairs:
-            # ── 4SP grader ──────────────────────────────────────
-            try:
-                s = await _grade_once(pair, ltf, feed_kind, equity, risk_pct)
-                key = _dedup_key(s)
-                last = last_signal_dedup_key(pair, minutes=60)
-                repeat = key == last
-                rank = grade_rank[s.grade]
-                should_send = rank >= min_rank and not repeat and not dry
+            # ── 4SP grader (skipped for rate-limited feeds) ─────
+            if not skip_4sp:
+                try:
+                    s = await _grade_once(pair, ltf, feed_kind, equity, risk_pct)
+                    key = _dedup_key(s)
+                    last = last_signal_dedup_key(pair, minutes=60)
+                    repeat = key == last
+                    rank = grade_rank[s.grade]
+                    should_send = rank >= min_rank and not repeat and not dry
 
-                line = (f"{t0:%H:%M:%S} [bold]{pair}[/] [4SP] {s.grade.value}"
-                        f" {s.direction or '-'}"
-                        f" {s.passed()}/{s.total()}"
-                        f" {'(dup)' if repeat else ''}")
-                print(line)
+                    line = (f"{t0:%H:%M:%S} [bold]{pair}[/] [4SP] {s.grade.value}"
+                            f" {s.direction or '-'}"
+                            f" {s.passed()}/{s.total()}"
+                            f" {'(dup)' if repeat else ''}")
 
-                if should_send and tg:
-                    ok = await tg.send(format_setup(s))
-                    log_signal(s, key, sent=ok)
-                else:
-                    log_signal(s, key, sent=False)
 
-            except Exception as e:
-                log.exception("4SP grade failed %s", pair)
-                print(f"[red]{pair} [4SP]: {type(e).__name__}: {e}[/]")
+
+
+                    print(line)
+
+                    if should_send and tg:
+                        ok = await tg.send(format_setup(s))
+                        log_signal(s, key, sent=ok)
+                    else:
+                        log_signal(s, key, sent=False)
+
+                except Exception as e:
+                    log.exception("4SP grade failed %s", pair)
+                    print(f"[red]{pair} [4SP]: {type(e).__name__}: {e}[/]")
 
             # ── Intraday signal scanner ──────────────────────────
             try:

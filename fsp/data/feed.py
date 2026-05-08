@@ -161,15 +161,22 @@ class YFinanceFeed:
         return df.tail(lookback_bars)
 
 
+# Singleton cache for feeds that need shared rate-limiting
+_feed_cache: dict[str, DataFeed] = {}
+
+
 def default_feed(kind: str = "duka", **kwargs) -> DataFeed:
     if kind == "duka":
         return DukascopyFeed()
     if kind == "yf":
         return YFinanceFeed()
     if kind == "td":
-        from .twelve import TwelveDataFeed
-        api_key = kwargs.get("api_key") or _load_td_key()
-        return TwelveDataFeed(api_key)
+        # Singleton — share rate limiter across all callers
+        if "td" not in _feed_cache:
+            from .twelve import TwelveDataFeed
+            api_key = kwargs.get("api_key") or _load_td_key()
+            _feed_cache["td"] = TwelveDataFeed(api_key)
+        return _feed_cache["td"]
     raise ValueError(f"Unknown feed kind: {kind!r}. Use: duka, yf, td")
 
 

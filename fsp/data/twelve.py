@@ -66,12 +66,15 @@ class TwelveDataFeed:
     """Real-time forex feed via Twelve Data REST API.
 
     Supports both single and batch (multi-symbol) requests.
+    Includes a response cache (TTL=60s) to avoid duplicate fetches within a scan cycle.
     """
 
     def __init__(self, api_key: str):
         self._key = api_key
         self._session = requests.Session()
         self._last_call = 0.0
+        self._cache: dict[str, tuple[float, pd.DataFrame]] = {}  # key -> (timestamp, df)
+        self._cache_ttl = 55.0  # seconds — just under 1 minute
 
     def _throttle(self):
         """Respect 8 calls/min → min 7.5s between calls."""
@@ -87,6 +90,21 @@ class TwelveDataFeed:
         resp.raise_for_status()
         return resp.json()
 
+    def _cache_key(self, pair: str, tf: str, outputsize: int) -> str:
+        return f"{pair}|{tf}|{outputsize}"
+
+    def _get_cached(self, key: str) -> pd.DataFrame | None:
+        if key in self._cache:
+            ts, df = self._cache[key]
+            if time.time() - ts < self._cache_ttl:
+                log.debug("Cache hit: %s", key)
+                return df
+            del self._cache[key]
+        return None
+
+    def _set_cached(self, key: str, df: pd.DataFrame) -> None:
+        self._cache[key] = (time.time(), df)
+
     def _fetch_single(self, pair: str, tf: str, outputsize: int = 500,
                       start_date: str | None = None, end_date: str | None = None) -> pd.DataFrame:
         sym = TD_SYMBOLS.get(pair)
@@ -95,6 +113,12 @@ class TwelveDataFeed:
         interval = TD_INTERVAL.get(tf)
         if interval is None:
             raise ValueError(f"Twelve Data: unsupported timeframe {tf}")
+
+        # Check cache (avoids duplicate fetches within same scan cycle)
+        cache_key = self._cache_key(pair, tf, outputsize)
+        cached = self._get_cached(cache_key)
+        if cached is not None:
+            return cached
 
         params: dict = {
             "symbol": sym,
@@ -113,7 +137,9 @@ class TwelveDataFeed:
         if data.get("status") != "ok":
             raise RuntimeError(f"Twelve Data error: {data.get('message', data)}")
 
-        return _parse_values(data.get("values", []))
+        df = _parse_values(data.get("values", []))
+        self._set_cached(cache_key, df)
+        return df
 
     def history(self, pair: Pair, tf: TF, start: datetime, end: datetime) -> pd.DataFrame:
         return self._fetch_single(
