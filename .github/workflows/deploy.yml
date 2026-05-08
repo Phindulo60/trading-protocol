@@ -6,6 +6,7 @@ on:
     paths-ignore:
       - '*.md'
       - 'docs/**'
+  workflow_dispatch:  # manual trigger from GitHub UI
 
 env:
   AWS_REGION: us-east-1
