@@ -77,10 +77,10 @@ class TwelveDataFeed:
         self._cache_ttl = 55.0  # seconds — just under 1 minute
 
     def _throttle(self):
-        """Respect 8 calls/min → min 7.5s between calls."""
+        """Respect 8 calls/min → min 8s between calls (with safety margin)."""
         elapsed = time.time() - self._last_call
-        if elapsed < 7.5:
-            time.sleep(7.5 - elapsed)
+        if elapsed < 8.0:
+            time.sleep(8.0 - elapsed)
         self._last_call = time.time()
 
     def _request(self, params: dict) -> dict:

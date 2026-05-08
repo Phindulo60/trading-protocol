@@ -268,7 +268,10 @@ resource "aws_ecs_service" "fsp" {
     assign_public_ip = true  # Needed for outbound internet in default VPC
   }
 
-  # Restart on failure
+  # Stop old task before starting new one (single API key can not handle two tasks)
+  deployment_minimum_healthy_percent = 0
+  deployment_maximum_percent         = 100
+
   deployment_circuit_breaker {
     enable   = true
     rollback = true
