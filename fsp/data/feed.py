@@ -174,14 +174,20 @@ def default_feed(kind: str = "duka", **kwargs) -> DataFeed:
 
 
 def _load_td_key() -> str:
-    """Load Twelve Data API key from ~/.fsp/config.toml."""
+    """Load Twelve Data API key from config or TWELVE_DATA_API_KEY env var."""
+    import os
+    # Env var takes priority (for containers)
+    key = os.environ.get("TWELVE_DATA_API_KEY")
+    if key:
+        return key
     import tomllib
-    cfg_path = Path.home() / ".fsp" / "config.toml"
+    from fsp.config import data_dir
+    cfg_path = data_dir() / "config.toml"
     if not cfg_path.exists():
-        raise RuntimeError("No [twelve_data] api_key in ~/.fsp/config.toml")
+        raise RuntimeError("Set TWELVE_DATA_API_KEY env var or add [twelve_data] api_key to config.toml")
     with open(cfg_path, "rb") as f:
         cfg = tomllib.load(f)
     key = cfg.get("twelve_data", {}).get("api_key")
     if not key:
-        raise RuntimeError("No [twelve_data] api_key in ~/.fsp/config.toml")
+        raise RuntimeError("Set TWELVE_DATA_API_KEY env var or add [twelve_data] api_key to config.toml")
     return key

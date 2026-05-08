@@ -1,0 +1,13 @@
+# Copy to terraform.tfvars and fill in your values
+# (terraform.tfvars is .gitignored)
+
+aws_region          = "us-east-1"
+telegram_bot_token  = "your-bot-token"
+telegram_chat_id    = "your-chat-id"
+twelve_data_api_key = "your-twelve-data-key"
+
+# Signal engine config
+pairs         = "EURUSD,GBPUSD,AUDUSD,USDCAD,EURJPY,GBPJPY"
+feed          = "td"
+enable_llm    = true
+scan_interval = 300

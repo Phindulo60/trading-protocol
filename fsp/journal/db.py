@@ -6,7 +6,8 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-DB_PATH = Path.home() / ".fsp" / "journal.db"
+from fsp.config import data_dir
+DB_PATH = data_dir() / "journal.db"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS signals (
