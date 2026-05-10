@@ -638,3 +638,22 @@ def review_cmd(
     """
     from fsp.journal.review import build_report
     print(build_report(strategy))
+
+@app.command("llm-backtest")
+def llm_backtest_cmd(
+    limit: int = typer.Option(None, help="Max signals to test (None=all)"),
+    strategy: str = typer.Option(None, help="Filter by strategy (e.g. ARB)"),
+):
+    """Replay historical signals through the LLM analyst and measure impact."""
+    from fsp.llm.backtest import run_backtest
+    summary = run_backtest(limit=limit, strategy=strategy, verbose=True)
+    print(f"\n[green]Done. {summary.total} signals backtested.[/]")
+
+
+@app.command("llm-learn")
+def llm_learn_cmd():
+    """Generate a trading playbook from backtest results (LLM self-review)."""
+    from fsp.llm.learner import generate_playbook
+    playbook = generate_playbook(verbose=True)
+    print(f"\n[green]Playbook saved. Will be used in all future LLM decisions.[/]")
+

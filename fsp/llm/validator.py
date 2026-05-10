@@ -85,6 +85,20 @@ class SignalValidator:
         self._client = boto3.client("bedrock-runtime", region_name=region)
         self._model_id = model_id
         self._fallback_id = FALLBACK_MODEL
+        self._playbook = self._load_playbook()
+
+    @staticmethod
+    def _load_playbook() -> str:
+        """Load trading playbook (learned from backtest) if available."""
+        try:
+            from fsp.llm.learner import load_playbook
+            pb = load_playbook()
+            if pb:
+                log.info("Trading playbook loaded (%d chars)", len(pb))
+                return f"\n\n## Your Trading Playbook (learned from past decisions)\n{pb}"
+        except Exception as e:
+            log.debug("No playbook available: %s", e)
+        return ""
 
     def validate(
         self,
@@ -202,7 +216,7 @@ class SignalValidator:
         response = self._client.converse(
             modelId=model_id,
             messages=[{"role": "user", "content": [{"text": user_msg}]}],
-            system=[{"text": SYSTEM_PROMPT}],
+            system=[{"text": SYSTEM_PROMPT + self._playbook}],
             inferenceConfig={"maxTokens": 500, "temperature": 0.2},
         )
 
