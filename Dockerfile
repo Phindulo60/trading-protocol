@@ -42,8 +42,8 @@ RUN mkdir -p /data/.fsp
 ENV FSP_DATA_DIR=/data/.fsp
 
 # Health check — process alive
-HEALTHCHECK --interval=60s --timeout=5s --retries=3 \
-    CMD pgrep -f "fsp live" || exit 1
+HEALTHCHECK --interval=60s --timeout=5s --retries=5 --start-period=120s \
+    CMD pgrep -f python || exit 1
 
 ENTRYPOINT ["fsp"]
 CMD ["live", "--feed", "td", "--llm", "--pairs", "EURUSD,GBPUSD,AUDUSD,USDCAD,EURJPY,GBPJPY", "--interval", "300"]

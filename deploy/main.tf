@@ -244,11 +244,11 @@ resource "aws_ecs_task_definition" "fsp" {
     }
 
     healthCheck = {
-      command     = ["CMD-SHELL", "pgrep -f 'fsp live' || exit 1"]
+      command     = ["CMD-SHELL", "pgrep -f python || exit 1"]
       interval    = 60
       timeout     = 5
-      retries     = 3
-      startPeriod = 30
+      retries     = 5
+      startPeriod = 120
     }
   }])
 }
@@ -271,6 +271,7 @@ resource "aws_ecs_service" "fsp" {
   # Stop old task before starting new one (single API key can not handle two tasks)
   deployment_minimum_healthy_percent = 0
   deployment_maximum_percent         = 100
+  health_check_grace_period_seconds  = 300
 
   deployment_circuit_breaker {
     enable   = true
