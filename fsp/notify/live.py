@@ -178,10 +178,16 @@ async def live_loop(pairs: list[str], ltf: str, feed_kind: str,
                             log_intraday_signal(sig, dk, sent=False)
                         else:
                             msg = format_signal(sig)
+                            # Analyst reasoning
                             if llm_result and llm_result.analysis:
-                                msg += f"\n\n🧠 Analyst: {llm_result.analysis}"
+                                msg += f"\n\n🧠 *Analyst:* {llm_result.analysis}"
+                            # Suggested level modifications
+                            if llm_result and llm_result.suggested_sl:
+                                msg += f"\n📍 Suggested SL: `{llm_result.suggested_sl:.5f}`"
+                            if llm_result and llm_result.suggested_tp:
+                                msg += f"\n🎯 Suggested TP: `{llm_result.suggested_tp:.5f}`"
                             if decision == "REDUCE":
-                                msg += "\n\n⚠️ REDUCE to half position"
+                                msg += "\n\n⚠️ *REDUCE to half position*"
                             ok = await tg.send(msg)
                             log_intraday_signal(sig, dk, sent=ok)
                     else:
