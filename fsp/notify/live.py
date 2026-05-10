@@ -148,33 +148,40 @@ async def live_loop(pairs: list[str], ltf: str, feed_kind: str,
                           f"{'(dup)' if repeat_sig else ''}")
 
                     if not repeat_sig and not dry and tg:
-                        # LLM validation gate
-                        llm_decision = "TAKE"
+                        # LLM analyst review
+                        llm_result = None
                         if use_llm:
                             v = _get_validator()
                             if v:
                                 try:
-                                    result = v.validate(
+                                    from fsp.llm.context import build_context
+                                    ctx = build_context(pair, sig.strategy)
+                                    llm_result = v.validate(
                                         pair=pair,
                                         direction=sig.direction,
                                         strategy=sig.strategy,
                                         entry=sig.entry,
                                         sl=sig.sl,
                                         tp=sig.tp1,
+                                        context=ctx,
                                     )
-                                    llm_decision = result.decision
-                                    print(f"  [dim]LLM: {result.decision} "
-                                          f"({result.confidence:.0%}) — "
-                                          f"{result.reason}[/]")
+                                    print(f"  [dim]LLM ({llm_result.model_used.split('.')[-1]}): "
+                                          f"{llm_result.decision} ({llm_result.confidence:.0%}) — "
+                                          f"{llm_result.reason}[/]")
                                 except Exception as e:
-                                    log.warning("LLM validation error: %s", e)
+                                    log.warning("LLM analyst error: %s", e)
 
-                        if llm_decision == "SKIP":
+                        decision = llm_result.decision if llm_result else "TAKE"
+
+                        if decision == "SKIP":
+                            print(f"  [yellow]SKIPPED by LLM: {llm_result.reason}[/]")
                             log_intraday_signal(sig, dk, sent=False)
                         else:
                             msg = format_signal(sig)
-                            if llm_decision == "REDUCE":
-                                msg += "\n⚠️ LLM: REDUCE (half size)"
+                            if llm_result and llm_result.analysis:
+                                msg += f"\n\n🧠 Analyst: {llm_result.analysis}"
+                            if decision == "REDUCE":
+                                msg += "\n\n⚠️ REDUCE to half position"
                             ok = await tg.send(msg)
                             log_intraday_signal(sig, dk, sent=ok)
                     else:
