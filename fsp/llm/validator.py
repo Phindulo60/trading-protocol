@@ -18,8 +18,8 @@ log = logging.getLogger(__name__)
 Decision = Literal["TAKE", "SKIP", "REDUCE"]
 
 # Sonnet for deep reasoning; Haiku as fallback
-DEFAULT_MODEL = "us.anthropic.claude-sonnet-4-20250514-v1:0"
-FALLBACK_MODEL = "anthropic.claude-3-haiku-20240307-v1:0"
+DEFAULT_MODEL = "us.anthropic.claude-opus-4-6-v1"
+FALLBACK_MODEL = "us.anthropic.claude-sonnet-4-20250514-v1:0"
 
 
 @dataclass
