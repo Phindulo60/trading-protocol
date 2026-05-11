@@ -57,10 +57,16 @@ resource "aws_vpc_endpoint" "logs" {
   private_dns_enabled = true
 }
 
+# All route tables in the VPC (main + any explicit subnet associations)
+data "aws_route_tables" "vpc" {
+  vpc_id = data.aws_vpc.default.id
+}
+
 # S3 Gateway — required for ECR image layer pulls (free, no hourly cost)
+# Must be on ALL route tables so tasks in any subnet can reach S3
 resource "aws_vpc_endpoint" "s3" {
   vpc_id            = data.aws_vpc.default.id
   service_name      = "com.amazonaws.${var.aws_region}.s3"
   vpc_endpoint_type = "Gateway"
-  route_table_ids   = [data.aws_vpc.default.main_route_table_id]
+  route_table_ids   = data.aws_route_tables.vpc.ids
 }
