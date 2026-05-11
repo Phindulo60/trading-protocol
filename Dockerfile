@@ -41,9 +41,7 @@ RUN mkdir -p /data/.fsp
 # Config will be mounted or passed via env vars
 ENV FSP_DATA_DIR=/data/.fsp
 
-# Health check — process alive
-HEALTHCHECK --interval=60s --timeout=5s --retries=5 --start-period=120s \
-    CMD pgrep -f python || exit 1
+# No Docker health check — ECS manages restarts via deployment circuit breaker
 
 ENTRYPOINT ["fsp"]
 CMD ["live", "--feed", "td", "--llm", "--pairs", "EURUSD,GBPUSD,AUDUSD,USDCAD,EURJPY,GBPJPY", "--interval", "300"]
