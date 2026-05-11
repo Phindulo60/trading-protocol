@@ -95,8 +95,12 @@ async def live_loop(pairs: list[str], ltf: str, feed_kind: str,
     else:
         print("[dim]Running: 4-Step Protocol grader + intraday scanner[/]")
 
+    cycle = 0
     while True:
+        cycle += 1
         t0 = datetime.now(timezone.utc)
+        total_signals = 0
+        total_sent = 0
 
         for pair in pairs:
             # ── 4SP grader (skipped for rate-limited feeds) ─────
@@ -132,6 +136,9 @@ async def live_loop(pairs: list[str], ltf: str, feed_kind: str,
             # ── Intraday signal scanner ──────────────────────────
             try:
                 signals = await scan_pair_live(pair, feed_kind)
+                if not signals:
+                    print(f"{t0:%H:%M:%S} [dim]{pair}[/] — no signals")
+                total_signals += len(signals)
                 for sig in signals:
                     dk = sig.dedup_key
                     last_sig = last_signal_dedup_key(pair, minutes=120,
@@ -199,6 +206,9 @@ async def live_loop(pairs: list[str], ltf: str, feed_kind: str,
 
         elapsed = (datetime.now(timezone.utc) - t0).total_seconds()
         sleep_for = max(5, interval_sec - elapsed)
+        print(f"[cyan]── cycle {cycle} done[/] · {len(pairs)} pairs · "
+              f"{total_signals} signals · scan={elapsed:.0f}s · "
+              f"sleep={sleep_for:.0f}s")
         await asyncio.sleep(sleep_for)
 
 
