@@ -202,3 +202,45 @@ async def scan_pair_live(pair: str, feed_kind: str) -> list[Signal]:
         return []
 
     return scan_all(pair, m5_df, m15_df, h1_df, daily_df)
+
+
+async def scan_batch_live(pairs: list[str], feed_kind: str) -> dict[str, list[Signal]]:
+    """Fetch all pairs in batch (4 HTTP calls instead of 24), run all strategies.
+
+    Returns {pair: [Signal, ...]}. Uses batch_latest for feeds that support it
+    (Twelve Data), falls back to per-pair fetching for others (Dukascopy/yfinance).
+    """
+    f = default_feed(feed_kind)
+
+    # Only Twelve Data supports batch — others fall back to per-pair
+    if not hasattr(f, "batch_latest"):
+        result: dict[str, list[Signal]] = {}
+        for pair in pairs:
+            result[pair] = await scan_pair_live(pair, feed_kind)
+        return result
+
+    # Batch fetch: 4 API calls (one per timeframe) instead of 24 individual calls
+    try:
+        m5_all = f.batch_latest(pairs, "M5", lookback_bars=864)     # ~3 days of M5
+        m15_all = f.batch_latest(pairs, "M15", lookback_bars=480)   # ~5 days of M15
+        h1_all = f.batch_latest(pairs, "H1", lookback_bars=720)     # ~30 days of H1
+        daily_all = f.batch_latest(pairs, "D", lookback_bars=60)    # ~60 days of D
+    except Exception as e:
+        log.error("Batch data fetch failed: %s", e)
+        raise  # let caller handle (e.g. credit exhaustion detection)
+
+    result = {}
+    for pair in pairs:
+        m5_df = m5_all.get(pair, pd.DataFrame())
+        m15_df = m15_all.get(pair, pd.DataFrame())
+        h1_df = h1_all.get(pair, pd.DataFrame())
+        daily_df = daily_all.get(pair, pd.DataFrame())
+
+        if m15_df.empty:
+            log.warning("No M15 data for %s — skipping", pair)
+            result[pair] = []
+            continue
+
+        result[pair] = scan_all(pair, m5_df, m15_df, h1_df, daily_df)
+
+    return result

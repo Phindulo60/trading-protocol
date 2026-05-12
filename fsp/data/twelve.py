@@ -189,7 +189,10 @@ class TwelveDataFeed:
             if data.get("status") == "ok":
                 result[pair] = _parse_values(data.get("values", []))
             else:
-                log.error("Twelve Data error for %s: %s", pair, data.get("message"))
+                msg = data.get("message", "")
+                if "API credits" in msg:
+                    raise RuntimeError(f"Twelve Data error: {msg}")
+                log.error("Twelve Data error for %s: %s", pair, msg)
         else:
             for sym in symbols:
                 pair = TD_SYMBOLS_REV.get(sym, sym)
@@ -197,7 +200,9 @@ class TwelveDataFeed:
                 if sym_data.get("status") == "ok":
                     result[pair] = _parse_values(sym_data.get("values", []))
                 else:
-                    log.error("Twelve Data error for %s: %s",
-                              pair, sym_data.get("message", "no data"))
+                    msg = sym_data.get("message", "no data")
+                    if "API credits" in msg:
+                        raise RuntimeError(f"Twelve Data error: {msg}")
+                    log.error("Twelve Data error for %s: %s", pair, msg)
 
         return result

@@ -13,7 +13,7 @@ from fsp.grader.setup import grade_setup, SetupCandidate
 from fsp.journal.db import last_signal_dedup_key, log_signal, log_intraday_signal
 from fsp.notify.config import load as load_cfg
 from fsp.notify.telegram import TelegramClient, format_setup, format_signal
-from fsp.signals.scanner import scan_pair_live
+from fsp.signals.scanner import scan_pair_live, scan_batch_live
 
 log = logging.getLogger("fsp.live")
 
@@ -102,6 +102,25 @@ async def live_loop(pairs: list[str], ltf: str, feed_kind: str,
         total_signals = 0
         total_sent = 0
 
+        # ── Batch fetch all pairs (4 API calls instead of 24) ────
+        batch_result = None
+        try:
+            batch_result = await scan_batch_live(pairs, feed_kind)
+        except Exception as e:
+            err_msg = str(e)
+            if "run out of API credits" in err_msg or "API credits" in err_msg:
+                from datetime import datetime as dt
+                now = dt.now(timezone.utc)
+                tomorrow = (now + timedelta(days=1)).replace(
+                    hour=0, minute=5, second=0, microsecond=0)
+                pause_secs = (tomorrow - now).total_seconds()
+                print(f"[yellow]⚠ API credits exhausted — pausing until {tomorrow:%H:%M} UTC "
+                      f"({pause_secs/3600:.1f}h)[/]")
+                await asyncio.sleep(pause_secs)
+                continue
+            log.exception("Batch scan failed")
+            print(f"[red]Batch scan error: {type(e).__name__}: {e}[/]")
+
         for pair in pairs:
             # ── 4SP grader (skipped for rate-limited feeds) ─────
             if not skip_4sp:
@@ -118,9 +137,6 @@ async def live_loop(pairs: list[str], ltf: str, feed_kind: str,
                             f" {s.passed()}/{s.total()}"
                             f" {'(dup)' if repeat else ''}")
 
-
-
-
                     print(line)
 
                     if should_send and tg:
@@ -133,9 +149,11 @@ async def live_loop(pairs: list[str], ltf: str, feed_kind: str,
                     log.exception("4SP grade failed %s", pair)
                     print(f"[red]{pair} [4SP]: {type(e).__name__}: {e}[/]")
 
-            # ── Intraday signal scanner ──────────────────────────
+            # ── Intraday signal scanner (uses batch data) ────────
+            if batch_result is None:
+                continue
             try:
-                signals = await scan_pair_live(pair, feed_kind)
+                signals = batch_result.get(pair, [])
                 if not signals:
                     print(f"{t0:%H:%M:%S} [dim]{pair}[/] — no signals")
                 total_signals += len(signals)
