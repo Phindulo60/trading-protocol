@@ -76,19 +76,38 @@ class TwelveDataFeed:
         self._cache: dict[str, tuple[float, pd.DataFrame]] = {}  # key -> (timestamp, df)
         self._cache_ttl = 55.0  # seconds — just under 1 minute
 
-    def _throttle(self):
-        """Respect 8 calls/min → min 8s between calls (with safety margin)."""
+    def _throttle(self, credits: int = 1):
+        """Respect 8 credits/min — pause based on credits used per call.
+
+        Each symbol in a batch counts as 1 credit. So a 6-symbol batch
+        needs ~7.5s × 6 = 45s before the next call (with safety margin).
+        """
+        # 8 credits/min = 7.5s/credit; add 0.5s safety margin per credit
+        min_gap = max(8.0, credits * 8.0)
         elapsed = time.time() - self._last_call
-        if elapsed < 8.0:
-            time.sleep(8.0 - elapsed)
+        if elapsed < min_gap:
+            time.sleep(min_gap - elapsed)
         self._last_call = time.time()
 
-    def _request(self, params: dict) -> dict:
-        """Make throttled API request."""
-        self._throttle()
+    def _request(self, params: dict, credits: int = 1) -> dict:
+        """Make throttled API request.
+
+        credits: number of symbols in batch (each = 1 credit).
+        """
+        self._throttle(credits=credits)
         resp = self._session.get(f"{BASE_URL}/time_series", params=params)
         resp.raise_for_status()
-        return resp.json()
+        data = resp.json()
+
+        # Detect flat error responses (rate limit, credit exhaustion, etc.)
+        # Single-symbol responses have status='ok' or 'error' at top level;
+        # batch responses are keyed by symbol with no top-level status.
+        # A flat error response has 'code' and 'message' but no symbol keys.
+        if isinstance(data, dict) and data.get("code") and data.get("message"):
+            msg = data["message"]
+            raise RuntimeError(f"Twelve Data API error (code {data['code']}): {msg}")
+
+        return data
 
     def _cache_key(self, pair: str, tf: str, outputsize: int) -> str:
         return f"{pair}|{tf}|{outputsize}"
@@ -178,7 +197,8 @@ class TwelveDataFeed:
             "timezone": "UTC",
         }
 
-        data = self._request(params)
+        # Each symbol in batch = 1 credit. Throttle accordingly.
+        data = self._request(params, credits=len(symbols))
 
         result: dict[str, pd.DataFrame] = {}
 

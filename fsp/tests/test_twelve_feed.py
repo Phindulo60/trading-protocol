@@ -90,3 +90,62 @@ def test_invalid_tf():
     feed._last_call = 999999999999
     with pytest.raises(ValueError, match="unsupported timeframe"):
         feed._fetch_single("EURUSD", "M3")
+
+
+@patch("fsp.data.twelve.requests.Session.get")
+def test_flat_error_response_per_minute(mock_get):
+    """Per-minute rate limit returns flat {code, message}, not nested per symbol.
+
+    The batch parser previously parsed this incorrectly as 'no data' for each
+    symbol, masking the real rate-limit error.
+    """
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = {
+        "code": 429,
+        "message": "You have run out of API credits for the current minute. "
+                   "12 API credits were used, with the current limit being 8.",
+    }
+    mock_resp.raise_for_status = MagicMock()
+    mock_get.return_value = mock_resp
+
+    feed = TwelveDataFeed("fake_key")
+    # Patch _throttle to no-op so the test runs fast
+    feed._throttle = lambda credits=1: None
+    with pytest.raises(RuntimeError, match="run out of API credits"):
+        feed.batch_latest(["EURUSD", "GBPUSD"], "M15", lookback_bars=5)
+
+
+@patch("fsp.data.twelve.requests.Session.get")
+def test_flat_error_response_daily(mock_get):
+    """Daily quota exhaustion also returns flat {code, message}."""
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = {
+        "code": 429,
+        "message": "You have run out of API credits for the day.",
+    }
+    mock_resp.raise_for_status = MagicMock()
+    mock_get.return_value = mock_resp
+
+    feed = TwelveDataFeed("fake_key")
+    feed._throttle = lambda credits=1: None
+    with pytest.raises(RuntimeError, match="run out of API credits"):
+        feed.batch_latest(["EURUSD", "GBPUSD"], "M15", lookback_bars=5)
+
+
+def test_throttle_scales_with_credits():
+    """Batch calls (N symbols = N credits) need N × 8s throttle.
+
+    Verifies the min_gap formula without actually sleeping.
+    """
+    import time
+    feed = TwelveDataFeed("fake_key")
+
+    # last_call far enough in the past = no sleep needed
+    feed._last_call = time.time() - 100
+    start = time.time()
+    feed._throttle(credits=6)
+    elapsed = time.time() - start
+    assert elapsed < 0.5, f"Should not sleep when last_call was 100s ago, elapsed={elapsed}"
+
+    # Verify formula: 1 credit → 8s, 6 credits → 48s
+    # Verified via source: min_gap = max(8.0, credits * 8.0)

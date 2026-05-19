@@ -108,13 +108,19 @@ async def live_loop(pairs: list[str], ltf: str, feed_kind: str,
             batch_result = await scan_batch_live(pairs, feed_kind)
         except Exception as e:
             err_msg = str(e)
-            if "run out of API credits" in err_msg or "API credits" in err_msg:
+            # Per-minute rate limit: short pause, retry next cycle
+            if "current minute" in err_msg:
+                print(f"[yellow]⚠ Per-minute rate limit hit — pausing 60s[/]")
+                await asyncio.sleep(60)
+                continue
+            # Daily quota exhausted: long pause until midnight UTC
+            if "run out of API credits" in err_msg:
                 from datetime import datetime as dt
                 now = dt.now(timezone.utc)
                 tomorrow = (now + timedelta(days=1)).replace(
                     hour=0, minute=5, second=0, microsecond=0)
                 pause_secs = (tomorrow - now).total_seconds()
-                print(f"[yellow]⚠ API credits exhausted — pausing until {tomorrow:%H:%M} UTC "
+                print(f"[yellow]⚠ Daily API credits exhausted — pausing until {tomorrow:%H:%M} UTC "
                       f"({pause_secs/3600:.1f}h)[/]")
                 await asyncio.sleep(pause_secs)
                 continue
