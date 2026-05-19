@@ -54,7 +54,7 @@ variable "pairs" {
 }
 
 variable "feed" {
-  default = "td"
+  default = "yf"
 }
 
 variable "enable_llm" {
