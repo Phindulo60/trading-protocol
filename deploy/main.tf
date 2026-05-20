@@ -50,7 +50,7 @@ variable "twelve_data_api_key" {
 }
 
 variable "pairs" {
-  default = "EURUSD,GBPUSD,AUDUSD,USDCAD,EURJPY,GBPJPY"
+  default = "USDCAD"
 }
 
 variable "feed" {

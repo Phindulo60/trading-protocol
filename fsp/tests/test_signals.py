@@ -302,17 +302,18 @@ class TestTrendRSI:
             assert sig.tp1 > sig.entry
             assert sig.rr_tp1 == pytest.approx(3.5)
 
-    def test_no_signal_outside_ny(self):
-        """Signal should not fire during LONDON session."""
+    def test_no_signal_outside_active_sessions(self):
+        """Signal should not fire during ASIA session (only LO/NY-AM/NY-PM v2)."""
         from fsp.signals.alpha import scan_trend_rsi
         h4 = self._make_h4(30, trend=0.0003)
         n = 80
         np.random.seed(8)
-        closes = 1.10 - np.cumsum(np.ones(n) * 0.0003)  # declining → RSI low
+        closes = 1.10 - np.cumsum(np.ones(n) * 0.0003)
         highs = closes + 0.0003; lows = closes - 0.0003
         opens = np.roll(closes, 1); opens[0] = closes[0]
-        # London session: 07:00-12:00 UTC (02:00-07:00 NY)
-        idx = pd.date_range("2024-01-15 08:00:00", periods=n, freq="15min", tz="UTC")
+        # ASIA: 19:00-03:00 NY (00:00-08:00 UTC). Use 02:00 UTC end = 21:00 NY prev day = ASIA.
+        # 80 bars × 15min = 20h. Start 06:00 UTC the prior day → end 02:00 UTC = ASIA.
+        idx = pd.date_range("2024-01-14 06:00:00", periods=n, freq="15min", tz="UTC")
         m15 = pd.DataFrame({"open": opens, "high": highs, "low": lows,
                               "close": closes, "volume": np.ones(n)}, index=idx)
         assert scan_trend_rsi("EURUSD", m15, h4) is None
@@ -321,14 +322,20 @@ class TestTrendRSI:
         """Signal should not fire on Friday."""
         from fsp.signals.alpha import scan_trend_rsi
         h4 = self._make_h4(30, trend=0.0003)
-        n = 80
+        # Use enough warmup but place LAST bar on Friday NY_AM (13:30 NY = 18:30 UTC)
+        # Start: Thursday 06:00 UTC.  80 × 15min = 20 hours → end Friday 02:00 UTC. WRONG.
+        # Need end Friday after 13:00 UTC (8:00 NY) but before Saturday.
+        # 60 bars × 15min = 15h. Start Thursday 22:30 UTC → end Friday 13:30 UTC = 08:30 NY (Fri NY_AM).
+        n = 60
         closes = 1.10 - np.cumsum(np.ones(n) * 0.0003)
         highs = closes + 0.0003; lows = closes - 0.0003
         opens = np.roll(closes, 1); opens[0] = closes[0]
-        # Friday NY-AM: 2024-01-19 is a Friday
-        idx = pd.date_range("2024-01-19 13:00:00", periods=n, freq="15min", tz="UTC")
+        # 2024-01-19 is a Friday
+        idx = pd.date_range("2024-01-18 22:30:00", periods=n, freq="15min", tz="UTC")
         m15 = pd.DataFrame({"open": opens, "high": highs, "low": lows,
                               "close": closes, "volume": np.ones(n)}, index=idx)
+        # Verify last bar is indeed Friday in NY (08:30 NY → weekday 4)
+        assert m15.index[-1].tz_convert("America/New_York").weekday() == 4
         assert scan_trend_rsi("EURUSD", m15, h4) is None
 
     def test_short_signal_h4_bear(self):
