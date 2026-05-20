@@ -125,6 +125,7 @@ import pandas as pd
 from fsp.data.feed import DataFeed, default_feed
 from fsp.signals.base import Signal
 from fsp.signals.alpha import scan_trend_rsi
+from fsp.signals.asia_hl import scan_asia_hl
 from fsp.signals.level_ob import scan_level_ob
 from fsp.signals.momentum import scan_momentum
 from fsp.signals.breakout import scan_breakout
@@ -167,6 +168,15 @@ def scan_all(pair: str,
             signals.append(sig)
     except Exception:
         log.exception("LEVEL_OB scan failed for %s", pair)
+
+    # 3. ASIA_HL — Fade tests of prior Asian session H/L in H4 trend direction
+    try:
+        if len(h4_df) >= 12:
+            sig = scan_asia_hl(pair, m15_df, h4_df)
+            if sig is not None:
+                signals.append(sig)
+    except Exception:
+        log.exception("ASIA_HL scan failed for %s", pair)
 
     # 4. ECM (legacy)
     try:
