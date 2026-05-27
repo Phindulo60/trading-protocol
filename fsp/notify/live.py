@@ -12,6 +12,7 @@ from fsp.data.types import Grade
 from fsp.grader.setup import grade_setup, SetupCandidate
 from fsp.journal.db import last_signal_dedup_key, log_signal, log_intraday_signal
 from fsp.notify.config import load as load_cfg
+from fsp.notify.daily_report import REPORT_HOUR_UTC, send_daily_report, should_send_report
 from fsp.notify.telegram import TelegramClient, format_setup, format_signal
 from fsp.signals.scanner import scan_pair_live, scan_batch_live
 
@@ -96,11 +97,31 @@ async def live_loop(pairs: list[str], ltf: str, feed_kind: str,
         print("[dim]Running: 4-Step Protocol grader + intraday scanner[/]")
 
     cycle = 0
+    last_report_date: str | None = None
     while True:
         cycle += 1
         t0 = datetime.now(timezone.utc)
         total_signals = 0
         total_sent = 0
+
+        # ── Daily report (once per UTC day, at REPORT_HOUR_UTC) ────────────────
+        if tg and should_send_report(t0, last_report_date):
+            try:
+                ok = await send_daily_report(
+                    tg,
+                    hours=24,
+                    pair=pairs[0] if pairs else "USDCAD",
+                    cycle_count=cycle,
+                    interval_sec=interval_sec,
+                )
+                if ok:
+                    last_report_date = t0.strftime("%Y-%m-%d")
+                    print(f"[green]📊 Daily report sent at {t0:%H:%M} UTC[/]")
+                else:
+                    print(f"[yellow]⚠ Daily report send failed (will retry next cycle)[/]")
+            except Exception as e:
+                log.exception("Daily report failed")
+                print(f"[red]Daily report error: {type(e).__name__}: {e}[/]")
 
         # ── Batch fetch all pairs (4 API calls instead of 24) ────
         batch_result = None

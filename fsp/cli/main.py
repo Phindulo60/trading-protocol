@@ -657,3 +657,31 @@ def llm_learn_cmd():
     playbook = generate_playbook(verbose=True)
     print(f"\n[green]Playbook saved. Will be used in all future LLM decisions.[/]")
 
+
+@app.command("daily-report")
+def daily_report_cmd(
+    send: bool = typer.Option(False, help="Send to Telegram (default: print only)"),
+    hours: int = typer.Option(24, help="Lookback window in hours"),
+    pair: str = typer.Option("USDCAD", help="Pair for current price quote"),
+):
+    """Generate the daily signal report. Use --send to push to Telegram."""
+    import asyncio
+    from fsp.notify.daily_report import compose_report, send_daily_report
+    from fsp.notify.config import load as load_cfg
+    from fsp.notify.telegram import TelegramClient
+
+    msg = compose_report(hours=hours, pair=pair)
+    print(msg)
+
+    if send:
+        cfg = load_cfg()
+        tg_cfg = cfg.get("telegram", {})
+        if not tg_cfg.get("bot_token") or not tg_cfg.get("chat_id"):
+            print("\n[red]No Telegram config — run `fsp telegram-setup` first.[/]")
+            return
+        tg = TelegramClient(tg_cfg["bot_token"], tg_cfg["chat_id"])
+        ok = asyncio.run(send_daily_report(tg, hours=hours, pair=pair))
+        color = "green" if ok else "red"
+        result = "OK" if ok else "FAILED"
+        print(f"\n[{color}]Telegram send: {result}[/]")
+
