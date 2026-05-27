@@ -178,7 +178,7 @@ def scan_all(pair: str,
     except Exception:
         log.exception("ASIA_HL scan failed for %s", pair)
 
-    # 4. ECM (legacy)
+    # 4. ECM (legacy — still firing, break-even)
     try:
         sig = scan_momentum(pair, m15_df, h1_df, daily_df)
         if sig is not None:
@@ -186,13 +186,10 @@ def scan_all(pair: str,
     except Exception:
         log.exception("ECM scan failed for %s", pair)
 
-    # 5. ARB (legacy)
-    try:
-        sig = scan_breakout(pair, m5_df, h1_df, daily_df)
-        if sig is not None:
-            signals.append(sig)
-    except Exception:
-        log.exception("ARB scan failed for %s", pair)
+    # 5. ARB DISABLED — 7-day live test on USDCAD: 4 signals, WR=25%, -1.21R
+    # The Asian Range Breakout doesn't work on USDCAD's mean-reverting regime.
+    # Confirmed by phase 4 backtest: Donchian/breakout setups all fail on USDCAD.
+    # Keep code in repo but skip in scan_all to avoid bleeding losses.
 
     return signals
 

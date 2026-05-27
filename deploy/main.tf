@@ -149,9 +149,16 @@ resource "aws_iam_role_policy" "bedrock_access" {
       Effect = "Allow"
       Action = [
         "bedrock:InvokeModel",
-        "bedrock:Converse"
+        "bedrock:Converse",
+        "bedrock:ConverseStream"
       ]
-      Resource = ["arn:aws:bedrock:${var.aws_region}::foundation-model/*"]
+      # Cross-region inference profiles span multiple regions, so we need:
+      #   1. The inference profile ARN itself
+      #   2. The underlying foundation models in any region the profile uses
+      Resource = [
+        "arn:aws:bedrock:*::foundation-model/anthropic.*",
+        "arn:aws:bedrock:*:*:inference-profile/us.anthropic.*"
+      ]
     }]
   })
 }
