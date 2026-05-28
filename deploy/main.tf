@@ -145,21 +145,25 @@ resource "aws_iam_role_policy" "bedrock_access" {
   role = aws_iam_role.ecs_task.id
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
-      Effect = "Allow"
-      Action = [
-        "bedrock:InvokeModel",
-        "bedrock:Converse",
-        "bedrock:ConverseStream"
-      ]
-      # Cross-region inference profiles span multiple regions, so we need:
-      #   1. The inference profile ARN itself
-      #   2. The underlying foundation models in any region the profile uses
-      Resource = [
-        "arn:aws:bedrock:*::foundation-model/anthropic.*",
-        "arn:aws:bedrock:*:*:inference-profile/us.anthropic.*"
-      ]
-    }]
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "bedrock:InvokeModel",
+          "bedrock:Converse",
+          "bedrock:ConverseStream"
+        ]
+        Resource = [
+          "arn:aws:bedrock:*::foundation-model/anthropic.*",
+          "arn:aws:bedrock:*:*:inference-profile/us.anthropic.*"
+        ]
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["bedrock:ApplyGuardrail"]
+        Resource = ["arn:aws:bedrock:*:*:guardrail/*"]
+      }
+    ]
   })
 }
 
