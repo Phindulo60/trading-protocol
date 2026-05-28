@@ -13,6 +13,22 @@ from fsp.data.types import Grade
 log = logging.getLogger(__name__)
 
 
+def escape_md(text: str) -> str:
+    """Escape Telegram legacy-Markdown special chars in free-text content.
+
+    Use for any LLM-generated or user-supplied text that goes inside an
+    already-Markdown-formatted message. Hardcoded markup is unaffected.
+    """
+    if not text:
+        return ""
+    # Legacy Markdown special chars: _ * ` [ — backslash first to avoid double-escape
+    return (text.replace("\\", "\\\\")
+                .replace("_", r"\_")
+                .replace("*", r"\*")
+                .replace("`", r"\`")
+                .replace("[", r"\["))
+
+
 @dataclass
 class TelegramClient:
     bot_token: str

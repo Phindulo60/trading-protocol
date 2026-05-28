@@ -13,7 +13,7 @@ from fsp.grader.setup import grade_setup, SetupCandidate
 from fsp.journal.db import last_signal_dedup_key, log_signal, log_intraday_signal
 from fsp.notify.config import load as load_cfg
 from fsp.notify.daily_report import REPORT_HOUR_UTC, send_daily_report, should_send_report
-from fsp.notify.telegram import TelegramClient, format_setup, format_signal
+from fsp.notify.telegram import TelegramClient, escape_md, format_setup, format_signal
 from fsp.signals.scanner import scan_pair_live, scan_batch_live
 
 log = logging.getLogger("fsp.live")
@@ -230,9 +230,9 @@ async def live_loop(pairs: list[str], ltf: str, feed_kind: str,
                             log_intraday_signal(sig, dk, sent=False)
                         else:
                             msg = format_signal(sig)
-                            # Analyst reasoning
+                            # Analyst reasoning (escape Markdown special chars in LLM text)
                             if llm_result and llm_result.analysis:
-                                msg += f"\n\n🧠 *Analyst:* {llm_result.analysis}"
+                                msg += f"\n\n🧠 *Analyst:* {escape_md(llm_result.analysis)}"
                             # Suggested level modifications
                             if llm_result and llm_result.suggested_sl:
                                 msg += f"\n📍 Suggested SL: `{llm_result.suggested_sl:.5f}`"

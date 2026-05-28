@@ -158,3 +158,27 @@ def test_compose_report_runs_without_data(tmp_path, monkeypatch):
     msg = compose_report(hours=24, pair="USDCAD")
     assert "FSP Daily Report" in msg
     assert "No signals" in msg
+
+
+# ── escape_md ───────────────────────────────────────────────────────────────
+
+def test_escape_md_underscores():
+    from fsp.notify.telegram import escape_md
+    assert escape_md("TREND_RSI signal") == r"TREND\_RSI signal"
+
+
+def test_escape_md_asterisks():
+    from fsp.notify.telegram import escape_md
+    assert escape_md("Rule 5: 0% win rate") == r"Rule 5: 0% win rate"
+
+
+def test_escape_md_combined():
+    from fsp.notify.telegram import escape_md
+    src = "TREND_RSI is *broken*"
+    assert escape_md(src) == r"TREND\_RSI is \*broken\*"
+
+
+def test_escape_md_empty():
+    from fsp.notify.telegram import escape_md
+    assert escape_md("") == ""
+    assert escape_md(None) == ""
