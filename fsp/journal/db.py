@@ -133,14 +133,37 @@ def log_intraday_signal(sig, dedup_key: str, sent: bool) -> int:
 def migrate(c: sqlite3.Connection) -> None:
     """Add columns introduced after initial schema (safe to re-run)."""
     for col, typedef in [
-        ("r_multiple", "REAL"),
-        ("exit_ts",    "TEXT"),
+        ("r_multiple",    "REAL"),
+        ("exit_ts",       "TEXT"),
+        ("features_json", "TEXT"),  # GBM meta-model features at signal time
+        ("meta_p_win",    "REAL"),  # GBM-predicted P(win) — populated in Phase 3
     ]:
         try:
             c.execute(f"ALTER TABLE intraday_signals ADD COLUMN {col} {typedef}")
             c.commit()
         except sqlite3.OperationalError:
             pass  # column already exists
+
+
+def update_features(signal_id: int, features: dict) -> None:
+    """Persist extracted features for a logged signal."""
+    import json
+    with conn() as c:
+        migrate(c)
+        c.execute(
+            "UPDATE intraday_signals SET features_json=? WHERE id=?",
+            (json.dumps(features, default=str), signal_id),
+        )
+
+
+def update_meta_prediction(signal_id: int, p_win: float) -> None:
+    """Persist GBM meta-model prediction for a logged signal."""
+    with conn() as c:
+        migrate(c)
+        c.execute(
+            "UPDATE intraday_signals SET meta_p_win=? WHERE id=?",
+            (float(p_win), signal_id),
+        )
 
 
 def update_outcome(signal_id: int, outcome: str,

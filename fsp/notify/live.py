@@ -10,7 +10,9 @@ from rich import print
 from fsp.data.feed import default_feed
 from fsp.data.types import Grade
 from fsp.grader.setup import grade_setup, SetupCandidate
-from fsp.journal.db import last_signal_dedup_key, log_signal, log_intraday_signal
+from fsp.journal.db import (
+    last_signal_dedup_key, log_signal, log_intraday_signal, update_features,
+)
 from fsp.notify.config import load as load_cfg
 from fsp.notify.chat import ChatHandler
 from fsp.notify.daily_report import REPORT_HOUR_UTC, send_daily_report, should_send_report
@@ -18,6 +20,59 @@ from fsp.notify.telegram import TelegramClient, escape_md, format_setup, format_
 from fsp.signals.scanner import scan_pair_live, scan_batch_live
 
 log = logging.getLogger("fsp.live")
+
+
+# ── ML feature extractor (lazy-loaded) ────────────────────────────────────────
+_feature_extractor = None
+
+
+def _get_feature_extractor():
+    global _feature_extractor
+    if _feature_extractor is None:
+        try:
+            from fsp.ml.features import FeatureExtractor
+            _feature_extractor = FeatureExtractor()
+            log.info("ML feature extractor initialised")
+        except Exception as e:
+            log.warning("Feature extractor unavailable: %s", e)
+            _feature_extractor = False
+    return _feature_extractor if _feature_extractor else None
+
+
+async def _extract_and_persist_features(
+    sig, signal_id: int, llm_result, feed_kind: str,
+) -> None:
+    """Best-effort feature extraction. Failures never break the signal flow."""
+    try:
+        fe = _get_feature_extractor()
+        if fe is None:
+            return
+        f = default_feed(feed_kind)
+        end = datetime.now(timezone.utc)
+        m15 = f.history(sig.pair, "M15", end - timedelta(days=5), end)
+        h1 = f.history(sig.pair, "H1", end - timedelta(days=30), end)
+        # Build H4 from M15 (consistent with scanner)
+        h4 = None
+        try:
+            if len(m15) >= 55:
+                h4 = m15.resample("4h").agg({
+                    "open": "first", "high": "max", "low": "min",
+                    "close": "last", "volume": "sum",
+                }).dropna()
+        except Exception:
+            pass
+        ts = datetime.fromisoformat(sig.ts) if isinstance(sig.ts, str) else sig.ts
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        fs = fe.extract(
+            pair=sig.pair, strategy=sig.strategy, direction=sig.direction,
+            ts=ts, m15=m15, h1=h1, h4=h4, llm_result=llm_result,
+        )
+        update_features(signal_id, fs.to_dict())
+        log.info("Features extracted for signal %d", signal_id)
+    except Exception as e:
+        log.warning("Feature extraction failed for signal %s: %s",
+                    getattr(sig, "dedup_key", "?"), e)
 
 
 # ── LLM Validator (lazy-loaded) ──────────────────────────────────────────────
@@ -238,7 +293,7 @@ async def live_loop(pairs: list[str], ltf: str, feed_kind: str,
 
                         if decision == "SKIP":
                             print(f"  [yellow]SKIPPED by LLM: {llm_result.reason}[/]")
-                            log_intraday_signal(sig, dk, sent=False)
+                            sig_id = log_intraday_signal(sig, dk, sent=False)
                         else:
                             msg = format_signal(sig)
                             # Analyst reasoning (escape Markdown special chars in LLM text)
@@ -252,7 +307,13 @@ async def live_loop(pairs: list[str], ltf: str, feed_kind: str,
                             if decision == "REDUCE":
                                 msg += "\n\n⚠️ *REDUCE to half position*"
                             ok = await tg.send(msg)
-                            log_intraday_signal(sig, dk, sent=ok)
+                            sig_id = log_intraday_signal(sig, dk, sent=ok)
+
+                        # Extract + persist features for ML training (best-effort)
+                        if sig_id:
+                            asyncio.create_task(_extract_and_persist_features(
+                                sig, sig_id, llm_result, feed_kind,
+                            ))
                     else:
                         log_intraday_signal(sig, dk, sent=False)
 
