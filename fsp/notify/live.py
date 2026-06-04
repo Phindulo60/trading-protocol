@@ -12,6 +12,7 @@ from fsp.data.types import Grade
 from fsp.grader.setup import grade_setup, SetupCandidate
 from fsp.journal.db import last_signal_dedup_key, log_signal, log_intraday_signal
 from fsp.notify.config import load as load_cfg
+from fsp.notify.chat import ChatHandler
 from fsp.notify.daily_report import REPORT_HOUR_UTC, send_daily_report, should_send_report
 from fsp.notify.telegram import TelegramClient, escape_md, format_setup, format_signal
 from fsp.signals.scanner import scan_pair_live, scan_batch_live
@@ -98,8 +99,18 @@ async def live_loop(pairs: list[str], ltf: str, feed_kind: str,
 
     cycle = 0
     last_report_date: str | None = None
+
+    # ── Spawn chat poller as background task ─────────────────────────────────
+    cycle_ref: dict = {"cycle": 0, "interval_sec": interval_sec}
+    chat_task = None
+    if tg:
+        chat_handler = ChatHandler(tg, cycle_ref=cycle_ref)
+        chat_task = asyncio.create_task(chat_handler.poll_loop())
+        print("[cyan]💬 Chat poller started — send /help in Telegram to interact[/]")
+
     while True:
         cycle += 1
+        cycle_ref["cycle"] = cycle
         t0 = datetime.now(timezone.utc)
         total_signals = 0
         total_sent = 0
