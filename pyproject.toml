@@ -23,6 +23,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "pytest-asyncio>=0.23", "ruff>=0.5"]
+ml = ["lightgbm>=4.3", "scikit-learn>=1.5", "shap>=0.46"]
 
 [project.scripts]
 fsp = "fsp.cli.main:app"

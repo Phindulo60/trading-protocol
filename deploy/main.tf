@@ -50,7 +50,9 @@ variable "twelve_data_api_key" {
 }
 
 variable "pairs" {
-  default = "USDCAD"
+  # All 7 majors — multi-pair expansion June 2026
+  # Backtest (12mo): +1,159R total across both strategies on all pairs
+  default = "USDCAD,EURUSD,GBPUSD,AUDUSD,USDJPY,EURJPY,GBPJPY"
 }
 
 variable "feed" {
