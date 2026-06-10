@@ -125,19 +125,60 @@ class DukascopyFeed:
         return self.history(pair, tf, start, end).tail(lookback_bars)
 
 
+# Default per-call timeout for yfinance downloads. yfinance has no built-in
+# timeout; without this a hung TCP connection silently freezes the whole loop.
+# Override via FSP_YF_TIMEOUT env var.
+import os as _os
+_YF_TIMEOUT_SEC = float(_os.environ.get("FSP_YF_TIMEOUT", "15"))
+
+
+# Module-level long-lived executor. ThreadPoolExecutors __exit__ blocks until
+# all workers finish — which DEFEATS the timeout if we use it as a context
+# manager. Instead, keep one executor for the process lifetime and abandon
+# hung worker threads (they are GC daemons that wont prevent shutdown).
+import concurrent.futures as _cf
+_YF_EXECUTOR = _cf.ThreadPoolExecutor(max_workers=4, thread_name_prefix="yf_dl")
+
+
+def _yf_download_with_timeout(*args, timeout: float = _YF_TIMEOUT_SEC, **kwargs):
+    """Run yf.download in a thread with hard timeout. Raises TimeoutError on hang.
+
+    Uses a long-lived module-level executor so we can ABANDON hung threads
+    immediately (they keep running in background but we stop waiting). With
+    a context manager, __exit__ would block until the worker finished,
+    defeating the whole point of the timeout.
+    """
+    import yfinance as yf
+
+    fut = _YF_EXECUTOR.submit(yf.download, *args, **kwargs)
+    try:
+        return fut.result(timeout=timeout)
+    except _cf.TimeoutError:
+        # Cancel removes the future from the queue; the actual thread cant be
+        # interrupted but its leaked daemon — fine for finite-lifetime task.
+        fut.cancel()
+        log.warning("yf.download timeout after %ss — args=%s", timeout, args[:1])
+        raise TimeoutError(f"yfinance download timed out after {timeout}s")
+
+
 class YFinanceFeed:
     """Near-live FX bars via yfinance. 1-min bars ~15 min delayed on free tier,
-    but 5m+ are usually within a bar of real-time. No account needed."""
+    but 5m+ are usually within a bar of real-time. No account needed.
+
+    All yf.download calls have a 15s default timeout (configurable via
+    FSP_YF_TIMEOUT env var) — yfinance has no native timeout and will hang
+    indefinitely on slow Yahoo responses, freezing the whole scan loop.
+    """
 
     def history(self, pair: Pair, tf: TF, start: datetime, end: datetime) -> pd.DataFrame:
-        import yfinance as yf
         sym = YF_SYMBOLS.get(pair)
         if sym is None:
             raise ValueError(f"yfinance symbol not mapped for {pair}")
         if tf not in YF_INTERVAL:
             raise ValueError(f"Timeframe {tf} not supported by yfinance feed")
-        df = yf.download(sym, start=start, end=end, interval=YF_INTERVAL[tf],
-                         progress=False, auto_adjust=False)
+        df = _yf_download_with_timeout(sym, start=start, end=end,
+                                       interval=YF_INTERVAL[tf],
+                                       progress=False, auto_adjust=False)
         if df.empty:
             return df
         df.columns = [c.lower() if isinstance(c, str) else c[0].lower() for c in df.columns]
@@ -147,11 +188,11 @@ class YFinanceFeed:
         return df
 
     def latest(self, pair: Pair, tf: TF, lookback_bars: int = 500) -> pd.DataFrame:
-        import yfinance as yf
         sym = YF_SYMBOLS[pair]
         period = {"M1": "5d", "M5": "5d", "M15": "30d", "M30": "60d", "H1": "60d", "D": "2y"}[tf]
-        df = yf.download(sym, period=period, interval=YF_INTERVAL[tf],
-                         progress=False, auto_adjust=False)
+        df = _yf_download_with_timeout(sym, period=period,
+                                       interval=YF_INTERVAL[tf],
+                                       progress=False, auto_adjust=False)
         if df.empty:
             return df
         df.columns = [c.lower() if isinstance(c, str) else c[0].lower() for c in df.columns]

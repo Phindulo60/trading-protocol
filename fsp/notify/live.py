@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from datetime import datetime, timedelta, timezone
 
 from rich import print
@@ -20,6 +21,53 @@ from fsp.notify.telegram import TelegramClient, escape_md, format_setup, format_
 from fsp.signals.scanner import scan_pair_live, scan_batch_live
 
 log = logging.getLogger("fsp.live")
+
+
+# ── Watchdog (kills frozen scan loops) ──────────────────────────────────────
+WATCHDOG_WARN_MIN = float(os.environ.get("FSP_WATCHDOG_WARN_MIN", "10"))
+WATCHDOG_KILL_MIN = float(os.environ.get("FSP_WATCHDOG_KILL_MIN", "20"))
+
+
+async def _watchdog_loop(cycle_ref: dict, tg: TelegramClient | None) -> None:
+    """Monitor cycle heartbeat. Alert at WARN, force-restart at KILL.
+
+    The scanner has historically frozen silently after 12-24h of operation
+    (yfinance/network hangs Fargate cant detect). Watchdog ensures any stall
+    longer than WATCHDOG_KILL_MIN forces ECS to restart the task.
+    """
+    warned = False
+    while True:
+        await asyncio.sleep(60)  # check every minute
+        last = cycle_ref.get("last_cycle_at")
+        if last is None:
+            continue  # first cycle hasnt completed yet
+        elapsed = (datetime.now(timezone.utc) - last).total_seconds()
+
+        if elapsed > WATCHDOG_KILL_MIN * 60:
+            msg = (f"🚨 *Watchdog*: scan loop frozen for {elapsed/60:.0f} min "
+                   f"(>{WATCHDOG_KILL_MIN}). Forcing restart.")
+            log.error(msg)
+            if tg:
+                try:
+                    await asyncio.wait_for(tg.send(msg), timeout=10)
+                except Exception:
+                    pass
+            os._exit(1)  # Fargate will restart the task
+
+        elif elapsed > WATCHDOG_WARN_MIN * 60 and not warned:
+            warned = True
+            msg = (f"⚠️ *Watchdog*: scan loop stalled for {elapsed/60:.0f} min "
+                   f"(threshold {WATCHDOG_WARN_MIN}). Will force-restart at "
+                   f"{WATCHDOG_KILL_MIN} min.")
+            log.warning(msg)
+            if tg:
+                try:
+                    await asyncio.wait_for(tg.send(msg), timeout=10)
+                except Exception:
+                    pass
+
+        elif elapsed < WATCHDOG_WARN_MIN * 60 and warned:
+            warned = False  # cycles resumed — reset for next stall
 
 
 # ── ML feature extractor (lazy-loaded) ────────────────────────────────────────
@@ -156,12 +204,17 @@ async def live_loop(pairs: list[str], ltf: str, feed_kind: str,
     last_report_date: str | None = None
 
     # ── Spawn chat poller as background task ─────────────────────────────────
-    cycle_ref: dict = {"cycle": 0, "interval_sec": interval_sec}
+    cycle_ref: dict = {"cycle": 0, "interval_sec": interval_sec, "last_cycle_at": None}
     chat_task = None
     if tg:
         chat_handler = ChatHandler(tg, cycle_ref=cycle_ref)
         chat_task = asyncio.create_task(chat_handler.poll_loop())
         print("[cyan]💬 Chat poller started — send /help in Telegram to interact[/]")
+
+    # ── Watchdog: detects frozen loops + forces restart on stall ────────────
+    watchdog_task = asyncio.create_task(_watchdog_loop(cycle_ref, tg))
+    print(f"[cyan]🐕 Watchdog active — warn at {WATCHDOG_WARN_MIN}min, "
+          f"kill at {WATCHDOG_KILL_MIN}min[/]")
 
     while True:
         cycle += 1
@@ -190,9 +243,21 @@ async def live_loop(pairs: list[str], ltf: str, feed_kind: str,
                 print(f"[red]Daily report error: {type(e).__name__}: {e}[/]")
 
         # ── Batch fetch all pairs (4 API calls instead of 24) ────
+        # Wrap in cycle-level timeout — even with per-call yf timeouts, cumulative
+        # slowness across 28 sequential calls can exceed the cycle interval.
+        # Cap the entire batch at 2x the interval; abort if exceeded.
         batch_result = None
         try:
-            batch_result = await scan_batch_live(pairs, feed_kind)
+            batch_timeout = max(120.0, interval_sec * 2)
+            batch_result = await asyncio.wait_for(
+                scan_batch_live(pairs, feed_kind), timeout=batch_timeout,
+            )
+        except asyncio.TimeoutError:
+            log.error("Batch scan exceeded %.0fs — abandoning cycle", batch_timeout)
+            print(f"[red]⚠ Batch scan timed out after {batch_timeout:.0f}s — skipping cycle[/]")
+            cycle_ref["last_cycle_at"] = datetime.now(timezone.utc)  # heartbeat so watchdog doesnt fire
+            await asyncio.sleep(30)
+            continue
         except Exception as e:
             err_msg = str(e)
             # Per-minute rate limit: short pause, retry next cycle
@@ -323,6 +388,8 @@ async def live_loop(pairs: list[str], ltf: str, feed_kind: str,
 
         elapsed = (datetime.now(timezone.utc) - t0).total_seconds()
         sleep_for = max(5, interval_sec - elapsed)
+        # Record heartbeat for watchdog — must be set on EVERY cycle.
+        cycle_ref["last_cycle_at"] = datetime.now(timezone.utc)
         print(f"[cyan]── cycle {cycle} done[/] · {len(pairs)} pairs · "
               f"{total_signals} signals · scan={elapsed:.0f}s · "
               f"sleep={sleep_for:.0f}s")
