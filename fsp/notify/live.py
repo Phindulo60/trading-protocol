@@ -14,7 +14,7 @@ from fsp.grader.setup import grade_setup, SetupCandidate
 from fsp.journal.db import (
     last_signal_dedup_key, log_signal, log_intraday_signal, update_features,
 )
-from fsp.notify.config import load as load_cfg
+from fsp.notify.config import load as load_cfg, parse_chat_ids
 from fsp.notify.chat import ChatHandler
 from fsp.notify.daily_report import REPORT_HOUR_UTC, send_daily_report, should_send_report
 from fsp.notify.telegram import TelegramClient, escape_md, format_setup, format_signal
@@ -185,7 +185,12 @@ async def live_loop(pairs: list[str], ltf: str, feed_kind: str,
         if not tg_cfg.get("bot_token") or not tg_cfg.get("chat_id"):
             print("[red]No telegram config — run `fsp telegram-setup` or use --dry.[/]")
             return
-        tg = TelegramClient(tg_cfg["bot_token"], tg_cfg["chat_id"])
+        # chat_id may be comma-separated: "primary,extra1,extra2"
+        # Primary = your DM (gets commands). Extras = fan-out only (groups, etc).
+        primary, extras = parse_chat_ids(tg_cfg["chat_id"])
+        tg = TelegramClient(tg_cfg["bot_token"], primary, extras)
+        if extras:
+            print(f"[cyan]📡 Telegram fan-out: primary={primary}, extras={extras}[/]")
 
     grade_rank = {Grade.SKIP: 0, Grade.B: 1, Grade.A: 2, Grade.A_PLUS: 3}
     min_rank = grade_rank[min_grade]

@@ -12,6 +12,19 @@ from fsp.config import data_dir
 CONFIG_PATH = data_dir() / "config.toml"
 
 
+def parse_chat_ids(raw: str) -> tuple[str, list[str]]:
+    """Parse a chat_id string into (primary, extras).
+
+    Format: "primary" or "primary,extra1,extra2". Comma-separated;
+    whitespace stripped. The first id is the primary (DM, used for
+    command authorization). Subsequent ids are fan-out targets only.
+    """
+    parts = [p.strip() for p in raw.split(",") if p.strip()]
+    if not parts:
+        raise ValueError("chat_id is empty")
+    return parts[0], parts[1:]
+
+
 def load() -> dict[str, Any]:
     """Load config from file, with env var overrides for container deploys."""
     import os

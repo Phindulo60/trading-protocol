@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import httpx
 
@@ -31,22 +31,57 @@ def escape_md(text: str) -> str:
 
 @dataclass
 class TelegramClient:
+    """Telegram bot client with multi-recipient fan-out.
+
+    `chat_id` is the *primary* chat (always your DM) — used by the chat
+    poller for command authorization. `extra_chat_ids` are additional
+    recipients (groups, channels, second person) that receive signals only.
+
+    Sends fan out to all chat_ids in parallel. send() returns True if at
+    least one delivery succeeded.
+    """
     bot_token: str
     chat_id: str
+    extra_chat_ids: list[str] = field(default_factory=list)
+
+    @property
+    def all_chat_ids(self) -> list[str]:
+        return [self.chat_id] + list(self.extra_chat_ids)
+
+    async def _send_one(self, chat_id: str, text: str, parse_mode: str) -> bool:
+        url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
+        try:
+            async with httpx.AsyncClient(timeout=15) as c:
+                r = await c.post(url, json={
+                    "chat_id": chat_id,
+                    "text": text,
+                    "parse_mode": parse_mode,
+                    "disable_web_page_preview": True,
+                })
+                if r.status_code != 200:
+                    log.error("Telegram send to %s failed %s: %s",
+                              chat_id, r.status_code, r.text[:200])
+                    return False
+                return True
+        except Exception as e:
+            log.error("Telegram send to %s exception: %s", chat_id, e)
+            return False
 
     async def send(self, text: str, parse_mode: str = "Markdown") -> bool:
-        url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
-        async with httpx.AsyncClient(timeout=15) as c:
-            r = await c.post(url, json={
-                "chat_id": self.chat_id,
-                "text": text,
-                "parse_mode": parse_mode,
-                "disable_web_page_preview": True,
-            })
-            if r.status_code != 200:
-                log.error("Telegram send failed %s: %s", r.status_code, r.text)
-                return False
-            return True
+        """Fan out to all configured chat_ids. True if any delivery succeeded."""
+        ids = self.all_chat_ids
+        if len(ids) == 1:
+            # Fast path: skip gather overhead when only one recipient
+            return await self._send_one(ids[0], text, parse_mode)
+        results = await asyncio.gather(
+            *[self._send_one(cid, text, parse_mode) for cid in ids],
+            return_exceptions=True,
+        )
+        ok_count = sum(1 for r in results if r is True)
+        if ok_count < len(ids):
+            log.warning("Telegram fan-out partial: %d/%d delivered",
+                        ok_count, len(ids))
+        return ok_count > 0
 
     def send_sync(self, text: str) -> bool:
         return asyncio.run(self.send(text))
