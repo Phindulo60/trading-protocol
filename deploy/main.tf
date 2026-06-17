@@ -142,6 +142,66 @@ resource "aws_iam_role" "ecs_task" {
   })
 }
 
+# ── DynamoDB journal (persistent across task restarts) ───────────────────────
+
+resource "aws_dynamodb_table" "journal" {
+  name         = "fsp-journal"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "signal_id"
+
+  attribute {
+    name = "signal_id"
+    type = "S"
+  }
+  attribute {
+    name = "pair"
+    type = "S"
+  }
+  attribute {
+    name = "ts"
+    type = "S"
+  }
+  attribute {
+    name = "status"
+    type = "S"
+  }
+
+  global_secondary_index {
+    name            = "by_pair"
+    hash_key        = "pair"
+    range_key       = "ts"
+    projection_type = "ALL"
+  }
+
+  global_secondary_index {
+    name            = "by_status"
+    hash_key        = "status"
+    range_key       = "ts"
+    projection_type = "ALL"
+  }
+
+  tags = { project = var.project }
+}
+
+resource "aws_iam_role_policy" "dynamodb_journal" {
+  name = "dynamodb-journal"
+  role = aws_iam_role.ecs_task.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "dynamodb:PutItem", "dynamodb:GetItem", "dynamodb:UpdateItem",
+        "dynamodb:Query", "dynamodb:BatchWriteItem", "dynamodb:DescribeTable",
+      ]
+      Resource = [
+        aws_dynamodb_table.journal.arn,
+        "${aws_dynamodb_table.journal.arn}/index/*",
+      ]
+    }]
+  })
+}
+
 resource "aws_iam_role_policy" "bedrock_access" {
   name = "bedrock-invoke"
   role = aws_iam_role.ecs_task.id
@@ -239,6 +299,8 @@ resource "aws_ecs_task_definition" "fsp" {
     environment = [
       { name = "AWS_DEFAULT_REGION", value = var.aws_region },
       { name = "PYTHONUNBUFFERED", value = "1" },
+      { name = "FSP_JOURNAL_BACKEND", value = "dynamo" },
+      { name = "FSP_DYNAMO_TABLE", value = aws_dynamodb_table.journal.name },
     ]
 
     secrets = [

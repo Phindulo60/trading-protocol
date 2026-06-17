@@ -1,6 +1,7 @@
 """SQLite trade journal — logs every 4SP setup and intraday signal sent."""
 from __future__ import annotations
 
+import os
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -8,6 +9,23 @@ from pathlib import Path
 
 from fsp.config import data_dir
 DB_PATH = data_dir() / "journal.db"
+
+
+# ── Backend dispatch ──────────────────────────────────────────────────────────
+# FSP_JOURNAL_BACKEND=dynamo routes all writes/queries to DynamoDB (persistent).
+# Default is SQLite (local file). The DynamoJournal singleton is lazy-loaded.
+_dynamo_backend = None
+
+
+def _backend():
+    """Return the DynamoJournal singleton if enabled, else None (SQLite)."""
+    global _dynamo_backend
+    if os.environ.get("FSP_JOURNAL_BACKEND") != "dynamo":
+        return None
+    if _dynamo_backend is None:
+        from fsp.journal.dynamo import DynamoJournal
+        _dynamo_backend = DynamoJournal()
+    return _dynamo_backend
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS signals (
@@ -77,6 +95,9 @@ def last_signal_dedup_key(pair: str, minutes: int = 60,
     If strategy is given, look in intraday_signals table for that strategy.
     Otherwise look in the 4SP signals table.
     """
+    b = _backend()
+    if b is not None:
+        return b.last_signal_dedup_key(pair, minutes, strategy)
     cutoff = (datetime.now(timezone.utc) - timedelta(minutes=minutes)).isoformat()
     with conn() as c:
         if strategy is not None:
@@ -95,7 +116,10 @@ def last_signal_dedup_key(pair: str, minutes: int = 60,
     return r[0] if r else None
 
 
-def log_signal(setup, dedup_key: str, sent: bool) -> int:
+def log_signal(setup, dedup_key: str, sent: bool):
+    b = _backend()
+    if b is not None:
+        return b.log_signal(setup, dedup_key, sent)
     import json
     with conn() as c:
         cur = c.execute(
@@ -113,7 +137,10 @@ def log_signal(setup, dedup_key: str, sent: bool) -> int:
         return cur.lastrowid
 
 
-def log_intraday_signal(sig, dedup_key: str, sent: bool) -> int:
+def log_intraday_signal(sig, dedup_key: str, sent: bool):
+    b = _backend()
+    if b is not None:
+        return b.log_intraday_signal(sig, dedup_key, sent)
     import json
     with conn() as c:
         cur = c.execute(
@@ -145,8 +172,11 @@ def migrate(c: sqlite3.Connection) -> None:
             pass  # column already exists
 
 
-def update_features(signal_id: int, features: dict) -> None:
+def update_features(signal_id, features: dict) -> None:
     """Persist extracted features for a logged signal."""
+    b = _backend()
+    if b is not None:
+        return b.update_features(signal_id, features)
     import json
     with conn() as c:
         migrate(c)
@@ -156,8 +186,11 @@ def update_features(signal_id: int, features: dict) -> None:
         )
 
 
-def update_meta_prediction(signal_id: int, p_win: float) -> None:
+def update_meta_prediction(signal_id, p_win: float) -> None:
     """Persist GBM meta-model prediction for a logged signal."""
+    b = _backend()
+    if b is not None:
+        return b.update_meta_prediction(signal_id, p_win)
     with conn() as c:
         migrate(c)
         c.execute(
@@ -166,9 +199,12 @@ def update_meta_prediction(signal_id: int, p_win: float) -> None:
         )
 
 
-def update_outcome(signal_id: int, outcome: str,
+def update_outcome(signal_id, outcome: str,
                    r_multiple: float, exit_ts: str) -> None:
     """Write resolved outcome back to a logged signal."""
+    b = _backend()
+    if b is not None:
+        return b.update_outcome(signal_id, outcome, r_multiple, exit_ts)
     with conn() as c:
         migrate(c)
         c.execute(
@@ -179,6 +215,9 @@ def update_outcome(signal_id: int, outcome: str,
 
 def unresolved_signals(strategy: str | None = "TREND_RSI") -> list[dict]:
     """Return all signals without an outcome yet. strategy=None returns all."""
+    b = _backend()
+    if b is not None:
+        return b.unresolved_signals(strategy)
     with conn() as c:
         migrate(c)
         if strategy is not None:
@@ -206,6 +245,9 @@ def unresolved_signals(strategy: str | None = "TREND_RSI") -> list[dict]:
 
 def resolved_signals(strategy: str = "TREND_RSI") -> list[dict]:
     """Return all signals with outcomes filled — used by the review command."""
+    b = _backend()
+    if b is not None:
+        return b.resolved_signals(strategy)
     with conn() as c:
         migrate(c)
         rows = c.execute(
