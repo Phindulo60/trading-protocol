@@ -20,6 +20,7 @@ from fsp.backtest.engine import (
     _check_fill, _update_open, _realised_r,
 )
 from fsp.ict.engine import decide, TradeDecision
+from fsp.context.sessions import session_of
 from fsp.data.feed import default_feed
 
 GRADE_RANK = {"B": 1, "A": 2, "A+": 3}
@@ -128,7 +129,7 @@ def simulate_ict(
                 entry=entry, fill=fill, sl=stop, tp1=target, tp2=None,
                 risk_r=1.0, rr_tp1=rr, rr_tp2=None,
                 checklist_passed=d.score, checklist_total=12,
-                session="-", dow=local.weekday(),
+                session=session_of(ts, tz).value, dow=local.weekday(),
             )
 
     # close a still-open trade at the last bar (excluded from win/loss stats)
