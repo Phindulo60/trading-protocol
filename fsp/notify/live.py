@@ -330,6 +330,15 @@ async def live_loop(pairs: list[str], ltf: str, feed_kind: str,
                     last_core = "|".join(last_sig.split("|")[:3]) if last_sig else ""
                     repeat_sig = dk_core == last_core
 
+                    # ICT_SHADOW: journal-only, never alert/trade
+                    if sig.strategy == "ICT_SHADOW":
+                        if not repeat_sig:
+                            log_intraday_signal(sig, dk, sent=False)
+                            print(f"{t0:%H:%M:%S} [magenta]{pair}[/] [ICT_SHADOW] "
+                                  f"{sig.direction.upper()} entry={sig.entry:.5f} "
+                                  f"rr={sig.rr_tp1:.1f} — {sig.note} (logged)")
+                        continue
+
                     print(f"{t0:%H:%M:%S} [bold]{pair}[/] [{sig.strategy}] "
                           f"{sig.direction.upper()} entry={sig.entry:.5f} "
                           f"rr={sig.rr_tp1:.1f} "

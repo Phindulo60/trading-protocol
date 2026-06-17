@@ -118,6 +118,7 @@ RESEARCH FINDINGS  (8 pairs | Apr 2024–May 2025 | 50,918 level-touch events)
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime, timedelta, timezone
 
 import pandas as pd
@@ -191,8 +192,17 @@ def scan_all(pair: str,
     # Confirmed by phase 4 backtest: Donchian/breakout setups all fail on USDCAD.
     # Keep code in repo but skip in scan_all to avoid bleeding losses.
 
-    return signals
+    # 6. ICT_SHADOW — confluence engine, logged-only (gated by FSP_ICT_SHADOW)
+    if os.environ.get("FSP_ICT_SHADOW"):
+        try:
+            from fsp.ict.shadow import scan_ict_shadow
+            ssig = scan_ict_shadow(pair, m15_df, h1_df)
+            if ssig is not None:
+                signals.append(ssig)
+        except Exception:
+            log.debug("ICT shadow scan failed for %s", pair, exc_info=True)
 
+    return signals
 
 async def scan_pair_live(pair: str, feed_kind: str) -> list[Signal]:
     """Fetch fresh data and run all strategies. Used by the live loop."""
