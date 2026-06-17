@@ -148,14 +148,19 @@ def find_sweeps(
         if fut.empty:
             continue
         if p.side == "buy":
-            cond = (fut["high"] > p.price + buf) & (fut["close"] < p.price)
+            reclaim = (fut["high"] > p.price + buf) & (fut["close"] < p.price)
+            brk = fut["close"] > p.price          # closed above the high = consumed
         else:
-            cond = (fut["low"] < p.price - buf) & (fut["close"] > p.price)
-        hits = fut[cond]
-        if hits.empty:
+            reclaim = (fut["low"] < p.price - buf) & (fut["close"] > p.price)
+            brk = fut["close"] < p.price          # closed below the low = consumed
+        r_hits, b_hits = fut[reclaim], fut[brk]
+        if r_hits.empty:
             continue
-        ts = hits.index[0]
-        row = hits.iloc[0]
+        # the pool is taken only if the reclaim precedes any clean break-through
+        if not b_hits.empty and b_hits.index[0] < r_hits.index[0]:
+            continue
+        ts = r_hits.index[0]
+        row = r_hits.iloc[0]
         p.swept = True
         p.swept_ts = ts.to_pydatetime()
         sweeps.append(LiquiditySweep(
