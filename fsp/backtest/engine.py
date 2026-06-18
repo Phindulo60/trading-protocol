@@ -74,6 +74,8 @@ class Trade:
     exit_price: float | None = None
     bars_held: int = 0
     smt: str | None = None        # ICT SMT divergence at entry: 'confirmed'/'none'/None
+    target_kind: str | None = None  # DOL target type: PDH/PWH/PMH/EQH/swing/DR
+    sweep_major: str | None = None  # major standing level swept (Turtle Soup tell)
     pending_bars: int = 0
     filled_ts: datetime | None = None
     skip_reason: str = ""
@@ -137,6 +139,8 @@ class BacktestResult:
             "by_grade": brk(lambda t: t.grade),
             "by_session": brk(lambda t: t.session),
             "by_smt": brk(lambda t: t.smt or "n/a"),
+            "by_target_kind": brk(lambda t: t.target_kind or "n/a"),
+            "by_sweep_major": brk(lambda t: t.sweep_major or "minor"),
             "by_dow": brk(lambda t: dows[t.dow] if t.dow < 7 else "?"),
             "by_outcome": {o: len([t for t in closed if t.outcome == o])
                            for o in ("win1", "win2", "loss", "timeout", "be")},

@@ -51,6 +51,7 @@ def simulate_ict(
     smt_df: pd.DataFrame | None = None,
     smt_sign: int = 1,
     smt_partner: str | None = None,
+    context_window: int = 1500,
 ) -> BacktestResult:
     """Replay `ltf_df` bar-by-bar; open at most one ICT trade at a time."""
     cfg = exec_cfg or ExecConfig(partial_pct=1.0, min_rr_tp1=1.5)
@@ -95,6 +96,7 @@ def simulate_ict(
         # ---- look for a new signal ----
         if open_trade is None and i >= window and (i - last_signal_bar) >= cfg.cooldown_bars:
             win = ltf_df.iloc[i - window:i + 1]
+            ctx = ltf_df.iloc[max(0, i - context_window):i + 1]   # wider ctx for PDH/PDL/PWH
             hwin = None
             if htf_df is not None:
                 pos = htf_df.index.searchsorted(ts, side="right")  # bars[0:pos] have index <= ts
@@ -103,7 +105,8 @@ def simulate_ict(
             try:
                 d = decider(win, hwin, pair=pair, swing_length=swing_length,
                             lookback=lookback, atr_mult=atr_mult, atr_len=atr_len, tz=tz,
-                            smt_df=smt_df, smt_sign=smt_sign, smt_partner=smt_partner)
+                            smt_df=smt_df, smt_sign=smt_sign, smt_partner=smt_partner,
+                            context_df=ctx)
             except Exception:
                 bump("decider-error"); continue
 
@@ -135,7 +138,7 @@ def simulate_ict(
                 risk_r=1.0, rr_tp1=rr, rr_tp2=None,
                 checklist_passed=d.score, checklist_total=12,
                 session=session_of(ts, tz).value, dow=local.weekday(),
-                smt=d.smt,
+                smt=d.smt, target_kind=d.target_kind, sweep_major=d.sweep_major,
             )
 
     # close a still-open trade at the last bar (excluded from win/loss stats)
