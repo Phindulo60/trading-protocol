@@ -139,6 +139,7 @@ def decide(
     smt_sign: int = 1,
     smt_partner: str | None = None,
     context_df: pd.DataFrame | None = None,
+    dol_targets: bool = False,
 ) -> TradeDecision:
     """Score the latest bar of `ltf_df` for an ICT setup. `htf_df` drives bias
     (falls back to `ltf_df`).
@@ -174,11 +175,17 @@ def decide(
     obs = mark_ob_mitigation(find_order_blocks(ltf_df, tf, atr_mult, atr_len), ltf_df)
     last_close = float(ltf_df["close"].iloc[-1])
 
-    # standing liquidity (PDH/PDL/...) for draw-on-liquidity targets + sweep significance
-    ctx = context_df if context_df is not None else ltf_df
-    levels = significant_levels(ctx, tz)
-    sweep_major = sweep_significance(sweep.level, sweep.side, levels,
-                                     tol=0.3 * _atr_ref(ltf_df, atr_len))
+    # standing liquidity (PDH/PDL/...) — opt-in only. DOL targeting validated
+    # net-NEGATIVE as a default (distant levels = lower hit rate); kept behind a
+    # flag for experiments. Equal-pools are the one real magnet and the baseline
+    # nearest_unswept already captures those.
+    levels = None
+    sweep_major = None
+    if dol_targets:
+        ctx = context_df if context_df is not None else ltf_df
+        levels = significant_levels(ctx, tz)
+        sweep_major = sweep_significance(sweep.level, sweep.side, levels,
+                                         tol=0.3 * _atr_ref(ltf_df, atr_len))
 
     score = 0
     confs: list[str] = []
@@ -273,7 +280,12 @@ def decide(
         entry = arr[1] if arr is not None else (dr.ote_sweet_spot("bull") if dr else last_close)
         floor = min(sweep.extreme, arr[2]) if arr is not None else sweep.extreme
         stop = floor - buf
-        tp_price, target_kind = best_target(pools, levels, "buy", entry)
+        if dol_targets:
+            tp_price, target_kind = best_target(pools, levels, "buy", entry)
+        else:
+            tp_pool = nearest_unswept(pools, "buy", entry)
+            tp_price = tp_pool.price if tp_pool is not None else None
+            target_kind = tp_pool.kind if tp_pool is not None else None
         target = tp_price if tp_price is not None else (dr.high if dr else None)
         if tp_price is None:
             target_kind = "DR" if dr else None
@@ -281,7 +293,12 @@ def decide(
         entry = arr[2] if arr is not None else (dr.ote_sweet_spot("bear") if dr else last_close)
         ceil = max(sweep.extreme, arr[1]) if arr is not None else sweep.extreme
         stop = ceil + buf
-        tp_price, target_kind = best_target(pools, levels, "sell", entry)
+        if dol_targets:
+            tp_price, target_kind = best_target(pools, levels, "sell", entry)
+        else:
+            tp_pool = nearest_unswept(pools, "sell", entry)
+            tp_price = tp_pool.price if tp_pool is not None else None
+            target_kind = tp_pool.kind if tp_pool is not None else None
         target = tp_price if tp_price is not None else (dr.low if dr else None)
         if tp_price is None:
             target_kind = "DR" if dr else None

@@ -89,13 +89,25 @@ def test_sweep_significance_prefers_highest_rank():
     assert sweep_significance(1.1050, "buy", levels, tol=0.0002) == "PWH"
 
 
-def test_engine_records_target_and_sweep_major():
+def test_engine_default_uses_baseline_targeting():
+    # default (dol_targets=False): target from nearest structural pool;
+    # target_kind reflects pool kind ('equal'/'swing'); no level computation.
     from fsp.tests.test_ict_engine import make_df, BULL_BARS
     from fsp.ict.engine import decide
     d = decide(make_df(BULL_BARS), swing_length=2, atr_len=3, lookback=30)
-    # target_kind is always set when a plan exists
+    if d.is_tradable:
+        assert d.target_kind in ("equal", "swing", "DR")
+    assert d.sweep_major is None     # not computed unless dol_targets=True
+
+
+def test_engine_dol_targets_opt_in():
+    # dol_targets=True: target_kind can be a standing-level label; sweep_major
+    # is evaluated (None or a label).
+    from fsp.tests.test_ict_engine import make_df, BULL_BARS
+    from fsp.ict.engine import decide
+    d = decide(make_df(BULL_BARS), swing_length=2, atr_len=3, lookback=30,
+               dol_targets=True)
     if d.is_tradable:
         assert d.target_kind in ("PDH", "PWH", "PMH", "PDL", "PWL", "PML",
                                  "EQH", "EQL", "swing", "DR")
-    # sweep_major is None or a level label (no crash)
     assert d.sweep_major is None or isinstance(d.sweep_major, str)
