@@ -128,10 +128,21 @@ def decide(
     atr_len: int = 20,
     sl_buffer_atr: float = 0.1,
     tz: str = DEFAULT_TZ,
+    drop_off_session: bool = True,
+    exhaustion_score: int | None = 10,
 ) -> TradeDecision:
     """Score the latest bar of `ltf_df` for an ICT setup. `htf_df` drives bias
-    (falls back to `ltf_df`)."""
+    (falls back to `ltf_df`).
+
+    Two robustness guards (from in-sample tuning, forward-validated via shadow):
+      drop_off_session   — veto signals during the OFF session (illiquid
+                           rollover/weekend; the only net-losing session bucket).
+      exhaustion_score   — veto when total confluence hits this score or above:
+                           max-confluence setups reverse almost always
+                           ("over-confluence = exhaustion"). None disables.
+    """
     last_ts = ltf_df.index[-1].to_pydatetime()
+    sess = session_of(pd.Timestamp(last_ts), tz)
     bias = htf_bias(htf_df if htf_df is not None else ltf_df, swing_length, atr_mult, atr_len)
 
     # liquidity + the triggering sweep
@@ -200,7 +211,7 @@ def decide(
         missing.append("no unmitigated PD array in zone")
 
     # 6) killzone timing
-    if in_killzone(last_ts, tz):
+    if sess in KILLZONES:
         score += 1; confs.append("killzone")
     else:
         missing.append("outside killzone")
@@ -211,6 +222,14 @@ def decide(
         if score >= thresh:
             grade = g
             break
+
+    # robustness guards (tuning-derived; see docstring). Veto -> grade=skip so
+    # both backtest and live shadow drop the signal with no extra wiring.
+    if drop_off_session and sess == Session.OFF:
+        grade = "skip"; missing.append("OFF session (illiquid) — vetoed")
+    if exhaustion_score is not None and score >= exhaustion_score:
+        grade = "skip"
+        missing.append(f"exhaustion guard (score>={exhaustion_score}) — vetoed")
 
     # trade plan
     entry = stop = target = rr = None

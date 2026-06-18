@@ -93,3 +93,35 @@ def test_summary_string():
     assert "LONG" in s and "entry=" in s and "target=" in s and "R)" in s
     skip = decide(make_df([(1.10, 1.1005, 1.0995, 1.10)] * 20), swing_length=2, atr_len=3)
     assert "no setup" in skip.summary()
+
+
+def test_off_session_vetoed():
+    # last bar lands at UTC 20:30 = NY 16:30 -> OFF (gap between NY_PM and ASIA)
+    off = make_df(BULL_BARS, start="2026-06-15 19:15")
+    base = decide(off, swing_length=2, atr_len=3, lookback=30,
+                  drop_off_session=False, exhaustion_score=None)
+    assert base.is_tradable                          # qualifies absent the guard
+    vetoed = decide(off, swing_length=2, atr_len=3, lookback=30,
+                    drop_off_session=True, exhaustion_score=None)
+    assert vetoed.direction == "long"                # direction still detected
+    assert vetoed.grade == "skip"
+    assert not vetoed.is_tradable
+    assert any("OFF session" in m for m in vetoed.missing)
+
+
+def test_exhaustion_guard_vetoes_high_score():
+    df = make_df(BULL_BARS)                           # NY-AM killzone, scores high
+    keep = decide(df, swing_length=2, atr_len=3, exhaustion_score=None)
+    assert keep.is_tradable
+    # bite the guard at a threshold the setup clears
+    vetoed = decide(df, swing_length=2, atr_len=3, exhaustion_score=keep.score)
+    assert vetoed.grade == "skip"
+    assert not vetoed.is_tradable
+    assert any("exhaustion guard" in m for m in vetoed.missing)
+
+
+def test_default_setup_passes_both_guards():
+    # in-killzone, score < 10, not OFF -> defaults keep it tradable
+    d = decide(make_df(BULL_BARS), swing_length=2, atr_len=3)
+    assert d.is_tradable
+    assert d.score < 10
