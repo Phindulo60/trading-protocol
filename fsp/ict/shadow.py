@@ -15,23 +15,43 @@ from fsp.ict.engine import decide, TradeDecision
 from fsp.ict.backtest import GRADE_RANK
 
 
+# Forward-test config — must mirror the validated ICT backtest headline
+# (tp_cap_r=4.0, max_hold_bars=64) so live outcomes are directly comparable.
+# See fsp/ict/backtest.py.
+TP_CAP_R = 4.0
+ICT_MAX_HOLD_BARS = 64
+
+
 def decision_to_signal(d: TradeDecision, pair: str) -> Signal | None:
-    """Map a tradable TradeDecision onto the shared Signal schema."""
+    """Map a tradable TradeDecision onto the shared Signal schema.
+
+    Caps the target at 4R and records a 64-bar hold window so the shadow
+    signal resolves under the same config the backtest was validated on.
+    """
     if not d.is_tradable:
         return None
     pip = 0.01 if "JPY" in pair else 0.0001
-    inv_pips = abs(d.entry - d.stop) / pip
+    entry = float(d.entry)
+    stop = float(d.stop)
+    target = float(d.target)
+    rr = float(d.rr) if d.rr is not None else 0.0
+    # Cap the target at TP_CAP_R (parity with backtest — see backtest.py:127).
+    if rr > TP_CAP_R:
+        risk = abs(entry - stop)
+        target = entry + TP_CAP_R * risk if d.direction == "long" else entry - TP_CAP_R * risk
+        rr = TP_CAP_R
+    inv_pips = abs(entry - stop) / pip
     note = f"ICT {d.grade} {d.score}/12: " + ", ".join(d.confluences[:4])
     return Signal(
         strategy="ICT_SHADOW",
         pair=pair,
         direction=d.direction,
-        entry=float(d.entry),
-        sl=float(d.stop),
-        tp1=float(d.target),
+        entry=entry,
+        sl=stop,
+        tp1=target,
         tp2=None,
         inv_pips=round(inv_pips, 1),
-        rr_tp1=round(float(d.rr), 2) if d.rr is not None else 0.0,
+        rr_tp1=round(rr, 2),
         rr_tp2=None,
         risk_r=1.0,
         note=note,
@@ -39,6 +59,7 @@ def decision_to_signal(d: TradeDecision, pair: str) -> Signal | None:
         context={
             "grade": d.grade, "score": d.score, "htf_bias": d.htf_bias,
             "confluences": d.confluences, "missing": d.missing,
+            "max_hold_bars": ICT_MAX_HOLD_BARS,
         },
     )
 

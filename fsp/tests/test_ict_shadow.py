@@ -72,3 +72,34 @@ def test_scan_batch():
     }
     sigs = scan_batch_ict_shadow(batch, window=16, swing_length=2, atr_len=3)
     assert len(sigs) == 1 and sigs[0].pair == "EURUSD"
+
+
+def test_tp_capped_at_4r_long():
+    # Raw rr=10 must be capped to 4R; target recomputed at entry + 4*risk.
+    d = TradeDecision(ts=pd.Timestamp("2026-06-15 13:00", tz="UTC").to_pydatetime(),
+                      direction="long", grade="A+", score=10, htf_bias="bull",
+                      entry=1.1000, stop=1.0980, target=1.1200, rr=10.0)
+    sig = decision_to_signal(d, "EURUSD")
+    assert sig.rr_tp1 == 4.0
+    assert abs(sig.tp1 - 1.1080) < 1e-9      # 1.1000 + 4 * 0.0020
+    assert sig.context["max_hold_bars"] == 64
+
+
+def test_tp_capped_at_4r_short():
+    d = TradeDecision(ts=pd.Timestamp("2026-06-15 13:00", tz="UTC").to_pydatetime(),
+                      direction="short", grade="A+", score=10, htf_bias="bear",
+                      entry=156.00, stop=156.30, target=153.00, rr=8.0)
+    sig = decision_to_signal(d, "USDJPY")
+    assert sig.rr_tp1 == 4.0
+    assert abs(sig.tp1 - 154.80) < 1e-9      # 156.00 - 4 * 0.30
+
+
+def test_tp_not_capped_below_4r():
+    # rr below the cap is preserved unchanged; hold window still stamped.
+    d = TradeDecision(ts=pd.Timestamp("2026-06-15 13:00", tz="UTC").to_pydatetime(),
+                      direction="long", grade="A", score=8, htf_bias="bull",
+                      entry=1.1000, stop=1.0980, target=1.1060, rr=3.0)
+    sig = decision_to_signal(d, "EURUSD")
+    assert sig.rr_tp1 == 3.0
+    assert sig.tp1 == 1.1060
+    assert sig.context["max_hold_bars"] == 64

@@ -21,7 +21,7 @@ from fsp.journal.db import unresolved_signals, update_outcome
 log = logging.getLogger("fsp.resolver")
 
 # Default max hold per strategy (M15 bars)
-_DEFAULT_HOLD = {"TREND_RSI": 8, "LEVEL_OB": 8, "ECM": 32, "ARB": 12}
+_DEFAULT_HOLD = {"TREND_RSI": 8, "LEVEL_OB": 8, "ECM": 32, "ARB": 12, "ICT_SHADOW": 64}
 FETCH_DAYS = 3      # days of M15 data to fetch per signal (covers the hold window)
 
 

@@ -27,6 +27,9 @@ log = logging.getLogger("fsp.live")
 WATCHDOG_WARN_MIN = float(os.environ.get("FSP_WATCHDOG_WARN_MIN", "10"))
 WATCHDOG_KILL_MIN = float(os.environ.get("FSP_WATCHDOG_KILL_MIN", "20"))
 
+# How often to resolve journalled signal outcomes (seconds). Hourly by default.
+RESOLVE_INTERVAL_SEC = float(os.environ.get("FSP_RESOLVE_INTERVAL_SEC", "3600"))
+
 
 async def _watchdog_loop(cycle_ref: dict, tg: TelegramClient | None) -> None:
     """Monitor cycle heartbeat. Alert at WARN, force-restart at KILL.
@@ -68,6 +71,24 @@ async def _watchdog_loop(cycle_ref: dict, tg: TelegramClient | None) -> None:
 
         elif elapsed < WATCHDOG_WARN_MIN * 60 and warned:
             warned = False  # cycles resumed — reset for next stall
+
+
+async def _run_resolver_bg() -> None:
+    """Resolve journalled signal outcomes off the critical path.
+
+    Runs ``resolve_all`` in a worker thread so a slow/hanging yfinance fetch
+    can't stall the scan loop (and trip the watchdog). Fire-and-forget;
+    logs a one-line summary.
+    """
+    try:
+        from fsp.journal.resolver import resolve_all
+        counts = await asyncio.to_thread(resolve_all, False)
+        log.info("resolver: %s", counts)
+        print(f"[cyan]🧮 Resolver: {counts['resolved']} resolved, "
+              f"{counts['skipped']} skipped, {counts['errors']} errors[/]")
+    except Exception as e:
+        log.exception("Background resolver failed")
+        print(f"[red]Resolver error: {type(e).__name__}: {e}[/]")
 
 
 # ── ML feature extractor (lazy-loaded) ────────────────────────────────────────
@@ -207,6 +228,8 @@ async def live_loop(pairs: list[str], ltf: str, feed_kind: str,
 
     cycle = 0
     last_report_date: str | None = None
+    last_resolve_at: datetime | None = None
+    resolve_task: asyncio.Task | None = None
 
     # ── Spawn chat poller as background task ─────────────────────────────────
     cycle_ref: dict = {"cycle": 0, "interval_sec": interval_sec, "last_cycle_at": None}
@@ -246,6 +269,15 @@ async def live_loop(pairs: list[str], ltf: str, feed_kind: str,
             except Exception as e:
                 log.exception("Daily report failed")
                 print(f"[red]Daily report error: {type(e).__name__}: {e}[/]")
+
+        # ── Outcome resolver (hourly, off the critical path) ───────────
+        # Stamps real forward outcomes on journalled signals (incl ICT_SHADOW).
+        # Runs in a worker thread so a slow yfinance fetch can't stall the
+        # scan loop or trip the watchdog.
+        if last_resolve_at is None or \
+                (t0 - last_resolve_at).total_seconds() >= RESOLVE_INTERVAL_SEC:
+            last_resolve_at = t0
+            resolve_task = asyncio.create_task(_run_resolver_bg())
 
         # ── Batch fetch all pairs (4 API calls instead of 24) ────
         # Wrap in cycle-level timeout — even with per-call yf timeouts, cumulative
