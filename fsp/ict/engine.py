@@ -30,6 +30,7 @@ from fsp.ict.bias import htf_bias
 from fsp.ict.structure import analyze_structure, StructureEvent
 from fsp.ict.liquidity import find_liquidity_pools, find_sweeps, nearest_unswept, LiquiditySweep
 from fsp.ict.premium_discount import dealing_range, DealingRange
+from fsp.ict.smt import smt_divergence
 from fsp.structure.fvg import find_fvgs, mark_mitigation
 from fsp.structure.order_blocks import find_order_blocks, mark_ob_mitigation
 from fsp.structure.displacement import atr
@@ -56,6 +57,7 @@ class TradeDecision:
     confluences: list[str] = field(default_factory=list)
     missing: list[str] = field(default_factory=list)
     notes: str = ""
+    smt: str | None = None          # 'confirmed' / 'none' / None (not evaluated)
 
     @property
     def is_tradable(self) -> bool:
@@ -130,6 +132,9 @@ def decide(
     tz: str = DEFAULT_TZ,
     drop_off_session: bool = True,
     exhaustion_score: int | None = 10,
+    smt_df: pd.DataFrame | None = None,
+    smt_sign: int = 1,
+    smt_partner: str | None = None,
 ) -> TradeDecision:
     """Score the latest bar of `ltf_df` for an ICT setup. `htf_df` drives bias
     (falls back to `ltf_df`).
@@ -181,6 +186,20 @@ def decide(
     score += 2; confs.append(f"{sweep.side}-side sweep @ {sweep.level:.5f}")
     if sweep.kind == "equal":
         score += 1; confs.append("swept equal-pool (strong liquidity)")
+
+    # 2b) SMT divergence — does the correlated pair fail to confirm the raid?
+    # Record-only for now (no score): validated as predictive before it earns
+    # confluence weight. Ch.17 Intermarket Relationships.
+    smt_note = None
+    if smt_df is not None:
+        _si = smt_df.index.searchsorted(ltf_df.index[-1], side="right")
+        sdf = smt_df.iloc[:_si]                                 # guard lookahead
+        res = smt_divergence(ltf_df, sdf, ref_ts=sweep.pool.created_ts,
+                             sweep_ts=sweep.ts, direction=direction,
+                             sign=smt_sign, partner=smt_partner)
+        smt_note = "confirmed" if res.diverged else "none"
+        (confs if res.diverged else missing).append(
+            f"SMT {'divergence' if res.diverged else 'no-confirm'} vs {smt_partner or 'partner'}")
 
     # 3) structure shift after the sweep, in direction
     mss_ev = _structure_after(st.events, sweep.ts, want_bias)
@@ -258,5 +277,5 @@ def decide(
     return TradeDecision(
         ts=last_ts, direction=direction, grade=grade, score=score,
         htf_bias=bias.direction, entry=entry, stop=stop, target=target, rr=rr,
-        pair=pair, confluences=confs, missing=missing,
+        pair=pair, confluences=confs, missing=missing, smt=smt_note,
     )

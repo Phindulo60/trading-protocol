@@ -20,6 +20,7 @@ from fsp.backtest.engine import (
     _check_fill, _update_open, _realised_r,
 )
 from fsp.ict.engine import decide, TradeDecision
+from fsp.ict.smt import partner_for
 from fsp.context.sessions import session_of
 from fsp.data.feed import default_feed
 
@@ -47,6 +48,9 @@ def simulate_ict(
     tp_cap_r: float | None = None,
     exec_cfg: ExecConfig | None = None,
     tz: str = "America/New_York",
+    smt_df: pd.DataFrame | None = None,
+    smt_sign: int = 1,
+    smt_partner: str | None = None,
 ) -> BacktestResult:
     """Replay `ltf_df` bar-by-bar; open at most one ICT trade at a time."""
     cfg = exec_cfg or ExecConfig(partial_pct=1.0, min_rr_tp1=1.5)
@@ -98,7 +102,8 @@ def simulate_ict(
                 hwin = htf_df.iloc[max(0, end - htf_window):end]
             try:
                 d = decider(win, hwin, pair=pair, swing_length=swing_length,
-                            lookback=lookback, atr_mult=atr_mult, atr_len=atr_len, tz=tz)
+                            lookback=lookback, atr_mult=atr_mult, atr_len=atr_len, tz=tz,
+                            smt_df=smt_df, smt_sign=smt_sign, smt_partner=smt_partner)
             except Exception:
                 bump("decider-error"); continue
 
@@ -130,6 +135,7 @@ def simulate_ict(
                 risk_r=1.0, rr_tp1=rr, rr_tp2=None,
                 checklist_passed=d.score, checklist_total=12,
                 session=session_of(ts, tz).value, dow=local.weekday(),
+                smt=d.smt,
             )
 
     # close a still-open trade at the last bar (excluded from win/loss stats)
@@ -161,7 +167,17 @@ def run_ict_backtest(
     f = default_feed(feed_kind)
     ltf_df = f.history(pair, ltf, start, end)
     htf_df = f.history(pair, htf, start, end) if htf else None
-    return simulate_ict(ltf_df, pair, htf_df, **kw)
+    # load SMT partner (same timeframe) if a correlation pairing is defined
+    smt_kw: dict = {}
+    pt = partner_for(pair)
+    if pt is not None:
+        p_pair, p_sign = pt
+        try:
+            smt_kw = dict(smt_df=f.history(p_pair, ltf, start, end),
+                          smt_sign=p_sign, smt_partner=p_pair)
+        except Exception:
+            pass  # partner unavailable — proceed without SMT
+    return simulate_ict(ltf_df, pair, htf_df, **smt_kw, **kw)
 
 
 def aggregate(results: dict[str, BacktestResult]) -> BacktestResult:

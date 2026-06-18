@@ -73,6 +73,7 @@ class Trade:
     weighted_r: float = 0.0
     exit_price: float | None = None
     bars_held: int = 0
+    smt: str | None = None        # ICT SMT divergence at entry: 'confirmed'/'none'/None
     pending_bars: int = 0
     filled_ts: datetime | None = None
     skip_reason: str = ""
@@ -135,6 +136,7 @@ class BacktestResult:
             "avg_win_over_loss": (avg_win / -avg_loss) if avg_loss < 0 else float("inf"),
             "by_grade": brk(lambda t: t.grade),
             "by_session": brk(lambda t: t.session),
+            "by_smt": brk(lambda t: t.smt or "n/a"),
             "by_dow": brk(lambda t: dows[t.dow] if t.dow < 7 else "?"),
             "by_outcome": {o: len([t for t in closed if t.outcome == o])
                            for o in ("win1", "win2", "loss", "timeout", "be")},
