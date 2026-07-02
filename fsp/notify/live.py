@@ -17,6 +17,7 @@ from fsp.journal.db import (
 from fsp.notify.config import load as load_cfg, parse_chat_ids
 from fsp.notify.chat import ChatHandler
 from fsp.notify.daily_report import REPORT_HOUR_UTC, send_daily_report, should_send_report
+from fsp.notify.calendar_report import send_calendar_brief, should_send_calendar
 from fsp.notify.telegram import TelegramClient, escape_md, format_setup, format_signal
 from fsp.signals.scanner import scan_pair_live, scan_batch_live
 
@@ -228,6 +229,7 @@ async def live_loop(pairs: list[str], ltf: str, feed_kind: str,
 
     cycle = 0
     last_report_date: str | None = None
+    last_calendar_date: str | None = None
     last_resolve_at: datetime | None = None
     resolve_task: asyncio.Task | None = None
 
@@ -269,6 +271,19 @@ async def live_loop(pairs: list[str], ltf: str, feed_kind: str,
             except Exception as e:
                 log.exception("Daily report failed")
                 print(f"[red]Daily report error: {type(e).__name__}: {e}[/]")
+
+        # ── Economic calendar brief (once/day at CALENDAR_HOUR_UTC) ─────
+        if tg and should_send_calendar(t0, last_calendar_date):
+            try:
+                ok = await send_calendar_brief(tg, t0)
+                if ok:
+                    last_calendar_date = t0.strftime("%Y-%m-%d")
+                    print(f"[green]📅 Calendar brief sent at {t0:%H:%M} UTC[/]")
+                else:
+                    print(f"[yellow]⚠ Calendar brief send failed (retry next cycle)[/]")
+            except Exception as e:
+                log.exception("Calendar brief failed")
+                print(f"[red]Calendar brief error: {type(e).__name__}: {e}[/]")
 
         # ── Outcome resolver (hourly, off the critical path) ───────────
         # Stamps real forward outcomes on journalled signals (incl ICT_SHADOW).
