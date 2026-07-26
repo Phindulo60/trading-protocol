@@ -19,6 +19,7 @@ from fsp.notify.chat import ChatHandler
 from fsp.notify.daily_report import REPORT_HOUR_UTC, send_daily_report, should_send_report
 from fsp.notify.calendar_report import send_calendar_brief, should_send_calendar
 from fsp.notify.telegram import TelegramClient, escape_md, format_setup, format_signal
+from fsp.execute.bridge import ExecutionConfig, maybe_execute
 from fsp.signals.scanner import scan_pair_live, scan_batch_live
 
 log = logging.getLogger("fsp.live")
@@ -213,6 +214,14 @@ async def live_loop(pairs: list[str], ltf: str, feed_kind: str,
         tg = TelegramClient(tg_cfg["bot_token"], primary, extras)
         if extras:
             print(f"[cyan]📡 Telegram fan-out: primary={primary}, extras={extras}[/]")
+
+    exec_cfg = ExecutionConfig.from_env()
+    if exec_cfg.ready:
+        strat_scope = ",".join(sorted(exec_cfg.strategies)) if exec_cfg.strategies else "all"
+        print(f"[bold red]⚡ LIVE EXECUTION ENABLED[/] bot={exec_cfg.bot_id} "
+              f"max_lot={exec_cfg.max_lot} strategies={strat_scope}")
+    elif exec_cfg.enabled:
+        print("[yellow]⚡ FSP_EXECUTE=1 but SUPABASE_URL/SERVICE_KEY missing — execution disabled[/]")
 
     grade_rank = {Grade.SKIP: 0, Grade.B: 1, Grade.A: 2, Grade.A_PLUS: 3}
     min_rank = grade_rank[min_grade]
@@ -434,6 +443,12 @@ async def live_loop(pairs: list[str], ltf: str, feed_kind: str,
                                 msg += "\n\n⚠️ *REDUCE to half position*"
                             ok = await tg.send(msg)
                             sig_id = log_intraday_signal(sig, dk, sent=ok)
+
+                            exec_detail = await maybe_execute(
+                                sig, equity, risk_pct, decision, cfg=exec_cfg
+                            )
+                            if exec_detail:
+                                print(f"  [bold green]⚡ Order queued: {exec_detail}[/]")
 
                         # Extract + persist features for ML training (best-effort)
                         if sig_id:
