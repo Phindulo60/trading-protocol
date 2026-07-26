@@ -11,3 +11,9 @@ pairs         = "EURUSD,GBPUSD,AUDUSD,USDCAD,EURJPY,GBPJPY"
 feed          = "td"
 enable_llm    = true
 scan_interval = 300
+
+# Execution bridge (FSP -> mt4-executor). Off unless fsp_execute = "1".
+supabase_url         = "https://asaxglwltlybcxlsiyfv.supabase.co"
+supabase_service_key = "your-supabase-service-role-key"  # sb_secret_...
+fsp_execute          = "0"     # "1" routes alerted signals to the engine
+fsp_execute_max_lot  = "0.10"

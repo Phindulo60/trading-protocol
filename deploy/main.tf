@@ -49,6 +49,27 @@ variable "twelve_data_api_key" {
   default   = "2788e10de579442d9b3f240bf30fd3f3"
 }
 
+variable "supabase_url" {
+  type    = string
+  default = ""
+}
+
+variable "supabase_service_key" {
+  type      = string
+  sensitive = true
+  default   = ""
+}
+
+variable "fsp_execute" {
+  type    = string
+  default = "0" # set to "1" to route alerted signals to the mt4-executor engine
+}
+
+variable "fsp_execute_max_lot" {
+  type    = string
+  default = "0.10"
+}
+
 variable "pairs" {
   # All 7 majors — multi-pair expansion June 2026
   # Backtest (12mo): +1,159R total across both strategies on all pairs
@@ -93,6 +114,7 @@ resource "aws_secretsmanager_secret_version" "fsp_secrets" {
     TELEGRAM_BOT_TOKEN   = var.telegram_bot_token
     TELEGRAM_CHAT_ID     = var.telegram_chat_id
     TWELVE_DATA_API_KEY  = var.twelve_data_api_key
+    SUPABASE_SERVICE_KEY = var.supabase_service_key
   })
 }
 
@@ -301,12 +323,16 @@ resource "aws_ecs_task_definition" "fsp" {
       { name = "PYTHONUNBUFFERED", value = "1" },
       { name = "FSP_JOURNAL_BACKEND", value = "dynamo" },
       { name = "FSP_DYNAMO_TABLE", value = aws_dynamodb_table.journal.name },
+      { name = "SUPABASE_URL", value = var.supabase_url },
+      { name = "FSP_EXECUTE", value = var.fsp_execute },
+      { name = "FSP_EXECUTE_MAX_LOT", value = var.fsp_execute_max_lot },
     ]
 
     secrets = [
       { name = "TELEGRAM_BOT_TOKEN", valueFrom = "${aws_secretsmanager_secret.fsp_secrets.arn}:TELEGRAM_BOT_TOKEN::" },
       { name = "TELEGRAM_CHAT_ID", valueFrom = "${aws_secretsmanager_secret.fsp_secrets.arn}:TELEGRAM_CHAT_ID::" },
       { name = "TWELVE_DATA_API_KEY", valueFrom = "${aws_secretsmanager_secret.fsp_secrets.arn}:TWELVE_DATA_API_KEY::" },
+      { name = "SUPABASE_SERVICE_KEY", valueFrom = "${aws_secretsmanager_secret.fsp_secrets.arn}:SUPABASE_SERVICE_KEY::" },
     ]
 
     logConfiguration = {
