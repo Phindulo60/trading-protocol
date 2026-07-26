@@ -210,7 +210,14 @@ resource "aws_dynamodb_table" "journal" {
     enabled = true
   }
 
-  tags = { project = var.project }
+  # no-delete: SpringClean whitelist marker (this is the SpringClean account
+  # 703671911115, which deleted this table once). Defense-in-depth alongside
+  # deletion_protection_enabled above.
+  tags = {
+    project     = var.project
+    owner       = "pmakhado"
+    "no-delete" = "true"
+  }
 }
 
 resource "aws_iam_role_policy" "dynamodb_journal" {
