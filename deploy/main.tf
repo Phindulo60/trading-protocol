@@ -202,6 +202,14 @@ resource "aws_dynamodb_table" "journal" {
     projection_type = "ALL"
   }
 
+  # Hardened after a SpringClean deletion wiped the table (2026-07-02).
+  # Must match the live table so an import does not strip them.
+  deletion_protection_enabled = true
+
+  point_in_time_recovery {
+    enabled = true
+  }
+
   tags = { project = var.project }
 }
 
