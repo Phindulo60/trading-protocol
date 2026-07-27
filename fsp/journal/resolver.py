@@ -44,7 +44,7 @@ def _resolve_one(sig: dict, m15: pd.DataFrame) -> tuple[str, float, str] | None:
     # Find bars strictly after the signal bar
     max_hold = sig.get("context", {}).get("max_hold_bars",
                   _DEFAULT_HOLD.get(sig.get("strategy", ""), 16))
-    future = m15[m15.index > sig_ts].head(max_hold)
+    future = m15[m15.index > sig_ts].head(int(max_hold))
     if future.empty:
         return None  # data not yet available (signal too recent)
 
@@ -142,7 +142,7 @@ def resolve_all(verbose: bool = False) -> dict[str, int]:
                         print(f"  {icon} {pair} {sig['ts'][:16]} {sig['direction'].upper()} "
                               f"→ {outcome} {r:+.2f}R")
             except Exception as e:
-                log.error("Resolve failed for signal %d: %s", sig["id"], e)
+                log.error("Resolve failed for signal %s: %s", sig["id"], e)
                 errors += 1
 
     return {"resolved": resolved, "skipped": skipped, "errors": errors}

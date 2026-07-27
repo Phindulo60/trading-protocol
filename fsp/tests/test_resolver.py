@@ -61,3 +61,13 @@ def test_sl_hit_returns_loss():
     m15 = _m15(50, sl_at=10)
     outcome, r, _ = _resolve_one(_sig("ICT_SHADOW"), m15)
     assert outcome == "loss" and r == -1.0
+
+
+def test_float_max_hold_bars_does_not_crash():
+    # Context values deserialized from JSON arrive as float (e.g. 64.0);
+    # .head() needs an int. Regression for the production TypeError flood.
+    m15 = _m15(50, tp_at=30)
+    outcome, r, _ = _resolve_one(
+        _sig("ICT_SHADOW", context={"max_hold_bars": 64.0}), m15
+    )
+    assert outcome == "win" and r == 2.0
