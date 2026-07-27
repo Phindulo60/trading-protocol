@@ -71,12 +71,39 @@ def test_size_position_below_min_returns_zero():
     assert lots == 0.0
 
 
-def test_size_position_jpy_pip_size():
-    # JPY pip size is 0.01, so loss/lot is 100x a 4-decimal pair for same pips.
+def test_size_position_usdjpy_converts_from_entry():
+    # USD-base pair: quote-currency loss is converted to USD *exactly* using the
+    # entry price. loss/lot(JPY) = 20*0.01*100000 = 20000 JPY; /150 entry = 133.33 USD.
+    # dollar_risk = 1_000_000*0.005*1 = 5000; 5000/133.33 = 37.5 lots.
     lots = size_position(equity=1_000_000, risk_pct=0.005, risk_r=1.0,
-                        inv_pips=20, symbol="USDJPY", max_lot=100)
-    # 5000 risk / (20 * 0.01 * 100000 = 20000) = 0.25
-    assert lots == 0.25
+                        inv_pips=20, symbol="USDJPY", entry=150.0, max_lot=100)
+    assert lots == 37.5
+
+
+def test_size_position_jpy_pair_not_zeroed_on_small_account():
+    # Regression: without quote->USD conversion, JPY pairs were ~150x oversized
+    # and rounded to 0 on a small account, silently skipping every JPY signal.
+    lots = size_position(equity=600, risk_pct=0.005, risk_r=2.5,
+                        inv_pips=20, symbol="EURJPY", entry=186.415, max_lot=0.03)
+    assert lots == 0.03  # sizes and caps at max_lot instead of returning 0
+
+
+def test_size_position_jpy_zero_without_conversion_when_rate_unknown():
+    # A JPY *cross* with an override map that omits JPY -> no rate -> falls back
+    # to the old unconverted behaviour (conservative), sizing to 0 on $600.
+    lots = size_position(equity=600, risk_pct=0.005, risk_r=2.5, inv_pips=20,
+                        symbol="EURJPY", entry=186.415, max_lot=0.03,
+                        quote_usd_rates={"CAD": 1.37})
+    assert lots == 0.0
+
+
+def test_quote_usd_rate_resolution():
+    from fsp.execute.bridge import _quote_usd_rate
+    assert _quote_usd_rate("EURUSD", 1.08, None) == 1.0      # quote is USD
+    assert _quote_usd_rate("USDJPY", 157.0, None) == 157.0   # base USD -> entry
+    assert _quote_usd_rate("USDCAD", 1.37, None) == 1.37     # base USD -> entry
+    assert _quote_usd_rate("EURJPY", 186.4, None) == 150.0   # cross -> default
+    assert _quote_usd_rate("USDJPY", 0.0, None) == 150.0     # no entry -> default
 
 
 def test_size_position_guards():

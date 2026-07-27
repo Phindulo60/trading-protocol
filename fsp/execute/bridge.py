@@ -26,6 +26,42 @@ log = logging.getLogger(__name__)
 # ICT_SHADOW is journal-only everywhere; never route it to execution.
 _NEVER_EXECUTE = frozenset({"ICT_SHADOW"})
 
+# Approximate "units of the quote currency per 1 USD" for a USD-denominated
+# account. Loss-per-lot is naturally computed in the pair's *quote* currency
+# (the 2nd leg); to express it in USD we divide by this rate. USD-quoted majors
+# (EURUSD, GBPUSD...) need no conversion (rate 1.0). USD-*base* pairs (USDJPY,
+# USDCAD, USDCHF) are converted *exactly* from the live entry price. Crosses
+# (EURJPY, GBPJPY, EURGBP...) carry no in-signal rate, so they fall back to
+# these approximate constants; max_lot remains the hard safety net.
+_DEFAULT_QUOTE_USD_RATES = {
+    "JPY": 150.0,
+    "CAD": 1.37,
+    "CHF": 0.88,
+    "GBP": 0.79,
+    "EUR": 0.92,
+    "AUD": 1.52,
+    "NZD": 1.66,
+}
+
+
+def _quote_usd_rate(symbol: str, entry: float, overrides: Optional[dict]) -> Optional[float]:
+    """Units of the pair's quote currency per 1 USD, or ``None`` if unknown.
+
+    - quote == USD  -> 1.0            (loss already in USD)
+    - base  == USD  -> ``entry``      (exact: entry price *is* quote-per-USD)
+    - cross         -> configured approximate rate for the quote currency
+    """
+    s = "".join(ch for ch in symbol.upper() if ch.isalpha())
+    if len(s) < 6:
+        return None
+    base, quote = s[:3], s[3:6]
+    if quote == "USD":
+        return 1.0
+    if base == "USD" and entry and entry > 0:
+        return entry
+    rates = overrides if overrides is not None else _DEFAULT_QUOTE_USD_RATES
+    return rates.get(quote)
+
 
 def size_position(
     *,
@@ -34,19 +70,22 @@ def size_position(
     risk_r: float,
     inv_pips: float,
     symbol: str,
+    entry: float = 0.0,
     contract_size: float = 100_000.0,
     min_lot: float = 0.01,
     max_lot: float = 0.10,
     lot_step: float = 0.01,
+    quote_usd_rates: Optional[dict] = None,
 ) -> float:
     """Convert a risk budget into a broker lot size.
 
     Dollar risk = ``equity * risk_pct * risk_r`` (matches FSP's existing
     convention in cli/main.py). Loss on 1.0 lot if the stop is hit is
-    ``inv_pips * pip_size * contract_size`` in the quote currency -- exact when
-    the account currency equals the quote currency (the USD-quoted majors:
-    EURUSD, GBPUSD, AUDUSD...), approximate otherwise. The ``max_lot`` cap is
-    the hard safety net for the approximate cases.
+    ``inv_pips * pip_size * contract_size`` in the *quote* currency, then
+    converted to USD via ``_quote_usd_rate`` (exact for USD-quoted and USD-base
+    pairs, approximate for crosses). Without this conversion JPY pairs are
+    ~150x oversized and size to zero on a small account. The ``max_lot`` cap
+    remains the hard safety net for the approximate cross cases.
 
     Returns lots snapped *down* to ``lot_step`` and clamped to ``max_lot``.
     Returns ``0.0`` (skip) when inputs are unusable or the sized lot rounds
@@ -56,9 +95,16 @@ def size_position(
         return 0.0
 
     pip_size = 0.01 if "JPY" in symbol.upper() else 0.0001
-    loss_per_lot = inv_pips * pip_size * contract_size
+    loss_per_lot = inv_pips * pip_size * contract_size  # in the quote currency
     if loss_per_lot <= 0:
         return 0.0
+
+    # Convert loss from the quote currency to USD (the account currency). If the
+    # rate is unknown (unrecognised cross) we leave it unconverted -- the same
+    # conservative behaviour as before, with max_lot as the safety net.
+    rate = _quote_usd_rate(symbol, entry, quote_usd_rates)
+    if rate and rate > 0:
+        loss_per_lot = loss_per_lot / rate
 
     dollar_risk = equity * risk_pct * risk_r
     raw_lots = dollar_risk / loss_per_lot
@@ -86,12 +132,28 @@ class ExecutionConfig:
     min_lot: float = 0.01
     lot_step: float = 0.01
     contract_size: float = 100_000.0
+    # Quote-currency -> USD rate overrides (None => built-in defaults).
+    quote_usd_rates: Optional[dict] = None
     # None => all strategies (except ICT_SHADOW). A set => only these.
     strategies: Optional[frozenset] = None
     timeout: float = 15.0
 
     @classmethod
     def from_env(cls) -> "ExecutionConfig":
+        raw_rates = os.environ.get("FSP_EXECUTE_QUOTE_USD_RATES", "").strip()
+        quote_usd_rates = None
+        if raw_rates:
+            parsed = {}
+            for item in raw_rates.split(","):
+                if ":" not in item:
+                    continue
+                ccy, val = item.split(":", 1)
+                try:
+                    parsed[ccy.strip().upper()] = float(val)
+                except ValueError:
+                    continue
+            quote_usd_rates = parsed or None
+
         raw_strats = os.environ.get("FSP_EXECUTE_STRATEGIES", "").strip()
         strategies = (
             frozenset(s.strip().upper() for s in raw_strats.split(",") if s.strip())
@@ -106,6 +168,7 @@ class ExecutionConfig:
             min_lot=float(os.environ.get("FSP_EXECUTE_MIN_LOT", "0.01")),
             lot_step=float(os.environ.get("FSP_EXECUTE_LOT_STEP", "0.01")),
             contract_size=float(os.environ.get("FSP_EXECUTE_CONTRACT_SIZE", "100000")),
+            quote_usd_rates=quote_usd_rates,
             strategies=strategies,
         )
 
@@ -157,10 +220,12 @@ async def maybe_execute(
         risk_r=risk_r,
         inv_pips=sig.inv_pips,
         symbol=sig.pair,
+        entry=sig.entry,
         contract_size=cfg.contract_size,
         min_lot=cfg.min_lot,
         max_lot=cfg.max_lot,
         lot_step=cfg.lot_step,
+        quote_usd_rates=cfg.quote_usd_rates,
     )
     if volume <= 0:
         log.info(
