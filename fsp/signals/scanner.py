@@ -130,6 +130,7 @@ from fsp.signals.asia_hl import scan_asia_hl
 from fsp.signals.level_ob import scan_level_ob
 from fsp.signals.momentum import scan_momentum
 from fsp.signals.breakout import scan_breakout
+from fsp.signals.scalp_mr import scan_scalp_mr
 
 log = logging.getLogger(__name__)
 
@@ -187,12 +188,20 @@ def scan_all(pair: str,
     except Exception:
         log.exception("ECM scan failed for %s", pair)
 
-    # 5. ARB DISABLED — 7-day live test on USDCAD: 4 signals, WR=25%, -1.21R
+    # 5. SCALP_MR — M5 Bollinger Band mean-reversion scalper
+    try:
+        sig = scan_scalp_mr(pair, m5_df)
+        if sig is not None:
+            signals.append(sig)
+    except Exception:
+        log.exception("SCALP_MR scan failed for %s", pair)
+
+    # 6. ARB DISABLED — 7-day live test on USDCAD: 4 signals, WR=25%, -1.21R
     # The Asian Range Breakout doesn't work on USDCAD's mean-reverting regime.
     # Confirmed by phase 4 backtest: Donchian/breakout setups all fail on USDCAD.
     # Keep code in repo but skip in scan_all to avoid bleeding losses.
 
-    # 6. ICT_SHADOW — confluence engine, logged-only (gated by FSP_ICT_SHADOW)
+    # 7. ICT_SHADOW — confluence engine, logged-only (gated by FSP_ICT_SHADOW)
     if os.environ.get("FSP_ICT_SHADOW"):
         try:
             from fsp.ict.shadow import scan_ict_shadow
