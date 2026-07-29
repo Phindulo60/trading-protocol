@@ -240,3 +240,89 @@ def test_maybe_execute_swallows_exception():
     cfg = _cfg()
     with patch("fsp.execute.bridge.httpx.AsyncClient", side_effect=RuntimeError("net down")):
         assert _run(maybe_execute(FakeSignal(), 600, 0.005, "TAKE", cfg=cfg)) is None
+
+
+# ── loss-limit circuit breaker ────────────────────────────────────────────────
+
+
+def _mock_get_post_ctx(equity=None, get_status=200, post_status=201):
+    """Mock an AsyncClient supporting both .get (bot_state) and .post (command)."""
+    get_resp = MagicMock()
+    get_resp.status_code = get_status
+    get_resp.json = MagicMock(
+        return_value=([] if equity is None else [{"equity": equity, "balance": equity}])
+    )
+    post_resp = MagicMock()
+    post_resp.status_code = post_status
+    post_resp.text = ""
+    client = AsyncMock()
+    client.get = AsyncMock(return_value=get_resp)
+    client.post = AsyncMock(return_value=post_resp)
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=client)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    return ctx, client
+
+
+def test_loss_limit_blocks_when_equity_below_floor():
+    cfg = _cfg(min_equity=512.75)
+    ctx, client = _mock_get_post_ctx(equity=500.00)
+    with patch("fsp.execute.bridge.httpx.AsyncClient", return_value=ctx):
+        detail = _run(maybe_execute(FakeSignal(), 10_000, 0.005, "TAKE", cfg=cfg))
+    assert detail is None
+    client.post.assert_not_awaited()  # no order may be placed
+
+
+def test_loss_limit_allows_when_equity_above_floor():
+    cfg = _cfg(min_equity=512.75)
+    ctx, client = _mock_get_post_ctx(equity=537.75)
+    with patch("fsp.execute.bridge.httpx.AsyncClient", return_value=ctx):
+        detail = _run(maybe_execute(FakeSignal(), 10_000, 0.005, "TAKE", cfg=cfg))
+    assert detail is not None
+    client.post.assert_awaited_once()
+
+
+def test_loss_limit_blocks_at_exact_floor_minus_cent():
+    cfg = _cfg(min_equity=512.75)
+    ctx, client = _mock_get_post_ctx(equity=512.74)
+    with patch("fsp.execute.bridge.httpx.AsyncClient", return_value=ctx):
+        assert _run(maybe_execute(FakeSignal(), 10_000, 0.005, "TAKE", cfg=cfg)) is None
+    client.post.assert_not_awaited()
+
+
+def test_loss_limit_fails_closed_when_equity_unreadable():
+    # bot_state row missing -> cannot verify -> must block, never trade blind.
+    cfg = _cfg(min_equity=512.75)
+    ctx, client = _mock_get_post_ctx(equity=None)
+    with patch("fsp.execute.bridge.httpx.AsyncClient", return_value=ctx):
+        assert _run(maybe_execute(FakeSignal(), 10_000, 0.005, "TAKE", cfg=cfg)) is None
+    client.post.assert_not_awaited()
+
+
+def test_loss_limit_fails_closed_on_http_error():
+    cfg = _cfg(min_equity=512.75)
+    ctx, client = _mock_get_post_ctx(equity=537.75, get_status=500)
+    with patch("fsp.execute.bridge.httpx.AsyncClient", return_value=ctx):
+        assert _run(maybe_execute(FakeSignal(), 10_000, 0.005, "TAKE", cfg=cfg)) is None
+    client.post.assert_not_awaited()
+
+
+def test_loss_limit_disabled_skips_equity_check():
+    # min_equity=0 (default) -> breaker off -> no bot_state round-trip at all.
+    cfg = _cfg(min_equity=0.0)
+    ctx, client = _mock_get_post_ctx(equity=1.00)  # would breach if checked
+    with patch("fsp.execute.bridge.httpx.AsyncClient", return_value=ctx):
+        detail = _run(maybe_execute(FakeSignal(), 10_000, 0.005, "TAKE", cfg=cfg))
+    assert detail is not None
+    client.get.assert_not_awaited()
+    client.post.assert_awaited_once()
+
+
+def test_config_min_equity_from_env(monkeypatch):
+    monkeypatch.setenv("FSP_EXECUTE_MIN_EQUITY", "512.75")
+    assert ExecutionConfig.from_env().min_equity == 512.75
+
+
+def test_config_min_equity_defaults_to_disabled(monkeypatch):
+    monkeypatch.delenv("FSP_EXECUTE_MIN_EQUITY", raising=False)
+    assert ExecutionConfig.from_env().min_equity == 0.0

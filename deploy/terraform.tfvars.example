@@ -18,3 +18,4 @@ supabase_service_key = "your-supabase-service-role-key"  # sb_secret_...
 fsp_execute          = "0"     # "1" routes alerted signals to the engine
 fsp_execute_max_lot  = "0.10"
 fsp_execute_strategies = ""    # empty=all; csv to restrict e.g. "SCALP_MR"
+fsp_execute_min_equity = "0"   # equity floor; below this the bridge stops trading ("0"=off)

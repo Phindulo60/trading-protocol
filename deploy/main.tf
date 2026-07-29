@@ -75,6 +75,11 @@ variable "fsp_execute_strategies" {
   default = "" # empty = all strategies; csv to restrict (e.g. "SCALP_MR")
 }
 
+variable "fsp_execute_min_equity" {
+  type    = string
+  default = "0" # absolute equity floor in account currency; "0" disables the breaker
+}
+
 variable "pairs" {
   # All 7 majors — multi-pair expansion June 2026
   # Backtest (12mo): +1,159R total across both strategies on all pairs
@@ -347,6 +352,7 @@ resource "aws_ecs_task_definition" "fsp" {
       { name = "FSP_EXECUTE", value = var.fsp_execute },
       { name = "FSP_EXECUTE_MAX_LOT", value = var.fsp_execute_max_lot },
       { name = "FSP_EXECUTE_STRATEGIES", value = var.fsp_execute_strategies },
+      { name = "FSP_EXECUTE_MIN_EQUITY", value = var.fsp_execute_min_equity },
     ]
 
     secrets = [

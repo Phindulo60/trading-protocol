@@ -9,6 +9,8 @@ engine; it just POSTs a command over HTTPS with the service-role key.
 Everything is opt-in and fails safe:
   * disabled unless ``FSP_EXECUTE=1``;
   * ``ICT_SHADOW`` is never executed (journal-only, matching the live loop);
+  * ``FSP_EXECUTE_MIN_EQUITY`` is a hard equity floor -- execution halts below
+    it, and also halts if equity cannot be read (fail-closed circuit breaker);
   * any error is logged and swallowed so a bad POST never breaks the scan loop.
 """
 from __future__ import annotations
@@ -134,6 +136,8 @@ class ExecutionConfig:
     contract_size: float = 100_000.0
     # Quote-currency -> USD rate overrides (None => built-in defaults).
     quote_usd_rates: Optional[dict] = None
+    # Hard equity floor (USD). 0 => disabled. Execution halts below this.
+    min_equity: float = 0.0
     # None => all strategies (except ICT_SHADOW). A set => only these.
     strategies: Optional[frozenset] = None
     timeout: float = 15.0
@@ -169,6 +173,7 @@ class ExecutionConfig:
             lot_step=float(os.environ.get("FSP_EXECUTE_LOT_STEP", "0.01")),
             contract_size=float(os.environ.get("FSP_EXECUTE_CONTRACT_SIZE", "100000")),
             quote_usd_rates=quote_usd_rates,
+            min_equity=float(os.environ.get("FSP_EXECUTE_MIN_EQUITY", "0") or 0),
             strategies=strategies,
         )
 
@@ -193,6 +198,56 @@ def _should_execute(sig, decision: str, cfg: ExecutionConfig) -> bool:
     return True
 
 
+async def _fetch_equity(cfg: ExecutionConfig) -> Optional[float]:
+    """Current account equity from the engine's ``bot_state`` row, or None.
+
+    ``None`` means "could not determine" -- callers must treat that as a
+    blocking condition, not as permission to trade.
+    """
+    url = (cfg.supabase_url.rstrip("/")
+           + f"/rest/v1/bot_state?bot_id=eq.{cfg.bot_id}&select=equity,balance")
+    try:
+        async with httpx.AsyncClient(timeout=cfg.timeout) as client:
+            resp = await client.get(url, headers={"apikey": cfg.supabase_key})
+        if resp.status_code >= 300:
+            log.warning("execute: equity fetch failed %s", resp.status_code)
+            return None
+        rows = resp.json()
+        if not rows:
+            return None
+        eq = rows[0].get("equity")
+        return None if eq is None else float(eq)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("execute: equity fetch error: %s", exc)
+        return None
+
+
+async def _loss_limit_ok(cfg: ExecutionConfig) -> bool:
+    """False when the equity floor is breached (or cannot be verified).
+
+    Fail-closed by design: a circuit breaker that opens the circuit when it
+    cannot read the meter is useless. The same Supabase round-trip is required
+    to POST the order anyway, so blocking here costs no extra availability.
+    """
+    if cfg.min_equity <= 0:
+        return True  # breaker disabled
+    equity = await _fetch_equity(cfg)
+    if equity is None:
+        log.warning(
+            "execute: cannot verify equity -- blocking execution (floor=%.2f)",
+            cfg.min_equity,
+        )
+        return False
+    if equity < cfg.min_equity:
+        log.warning(
+            "execute: LOSS LIMIT REACHED -- equity %.2f below floor %.2f "
+            "-- execution halted",
+            equity, cfg.min_equity,
+        )
+        return False
+    return True
+
+
 async def maybe_execute(
     sig,
     equity: float,
@@ -208,6 +263,9 @@ async def maybe_execute(
     """
     cfg = cfg or ExecutionConfig.from_env()
     if not _should_execute(sig, decision, cfg):
+        return None
+
+    if not await _loss_limit_ok(cfg):
         return None
 
     risk_r = sig.risk_r
