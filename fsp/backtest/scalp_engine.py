@@ -90,6 +90,21 @@ def _update(t: Trade, bar, bar_ts: pd.Timestamp,
         _close_trade(t, "timeout", close, bar_ts, cfg, pip)
 
 
+def _is_stale(sig, price: float) -> bool:
+    """True if the market has already left the signal's SL..TP window.
+
+    With ``entry_delay_bars`` the fill lands several bars after the scan, and
+    price may have run past the stop or past the target in the meantime. A
+    market order carrying an already-violated stop is rejected by the broker,
+    so such a signal must be dropped, not filled -- otherwise the replay books
+    an instant "stop out" at a price better than its own fill and turns a
+    missed trade into a phantom profit.
+    """
+    if sig.direction == "long":
+        return not (sig.sl < price < sig.tp1)
+    return not (sig.tp1 < price < sig.sl)
+
+
 def _enter(sig, ts: pd.Timestamp, bar_close: float,
            cfg: ScalpExecConfig, pip: float) -> Trade:
     """Market entry at the close of the fill bar, paying half the spread."""
@@ -170,8 +185,9 @@ def run_scalp_backtest(
         if pending is not None and i >= pending[0]:
             sig = pending[1]
             pending = None
-            if open_trade is None:
-                open_trade = _enter(sig, ts, float(bar["close"]), cfg, pip)
+            px = float(bar["close"])
+            if open_trade is None and not _is_stale(sig, px):
+                open_trade = _enter(sig, ts, px, cfg, pip)
                 continue
 
         if open_trade is not None or pending is not None:

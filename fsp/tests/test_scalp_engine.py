@@ -1,4 +1,6 @@
 """Tests for the SCALP_MR backtest engine — cost accounting and fill logic."""
+from datetime import timedelta
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -155,9 +157,10 @@ def test_entry_delay_defers_the_fill():
     late = run_scalp_backtest("EURUSD", s, e, m5=df,
                               cfg=ScalpExecConfig(entry_delay_bars=3))
     assert now.trades and late.trades
-    # Same signals, but each fill lands 3 bars (15 min) later.
-    assert late.trades[0].open_ts > now.trades[0].open_ts
-    assert (late.trades[0].open_ts - now.trades[0].open_ts).total_seconds() == 900
+    # No fill can land earlier than 3 bars after its signal, and some signals
+    # go stale in the interval, so a delayed run never fills more trades.
+    assert late.trades[0].open_ts >= now.trades[0].open_ts + timedelta(minutes=15)
+    assert len(late.trades) <= len(now.trades)
 
 
 def test_only_one_position_open_at_a_time():
@@ -175,3 +178,30 @@ def test_empty_frame_returns_no_trades():
                              m5=pd.DataFrame())
     assert res.trades == []
     assert res.stats()["total"] == 0
+
+
+def test_stale_signal_beyond_sl_is_dropped_not_filled():
+    """A delayed fill past the stop must be skipped. Filling it would book an
+    instant 'stop out' at a price better than the fill -- a phantom profit."""
+    from fsp.backtest.scalp_engine import _is_stale
+
+    long_sig = Signal(
+        strategy="SCALP_MR", pair="EURUSD", direction="long",
+        entry=1.1000, sl=1.0990, tp1=1.1010, tp2=None,
+        inv_pips=10.0, rr_tp1=1.0, rr_tp2=None, risk_r=1.0,
+        note="", ts=TS.isoformat(), context={},
+    )
+    assert _is_stale(long_sig, 1.0985)        # already through the stop
+    assert _is_stale(long_sig, 1.1015)        # already through the target
+    assert not _is_stale(long_sig, 1.1002)
+
+    short_sig = Signal(
+        strategy="SCALP_MR", pair="EURUSD", direction="short",
+        entry=1.1000, sl=1.1010, tp1=1.0990, tp2=None,
+        inv_pips=10.0, rr_tp1=1.0, rr_tp2=None, risk_r=1.0,
+        note="", ts=TS.isoformat(), context={},
+    )
+    assert _is_stale(short_sig, 1.1015)
+    assert _is_stale(short_sig, 1.0985)
+    assert not _is_stale(short_sig, 1.0998)
+
