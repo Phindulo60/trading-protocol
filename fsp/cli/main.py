@@ -610,6 +610,77 @@ def intraday_backtest_cmd(
         webbrowser.open(f"file://{out}")
 
 
+@app.command("scalp-backtest")
+def scalp_backtest_cmd(
+    pairs: str = typer.Option("EURUSD,GBPUSD,USDJPY,EURJPY,GBPJPY,AUDUSD,USDCAD",
+                              help="Comma-separated pairs"),
+    start: str = typer.Option(..., help="YYYY-MM-DD"),
+    end: str = typer.Option(..., help="YYYY-MM-DD"),
+    spreads: str = typer.Option("0.3,1.0,2.0,3.0",
+                                help="Spread sweep in pips — the break-even test"),
+    delay_bars: int = typer.Option(0, help="Feed latency in M5 bars (3 = ~15 min)"),
+    sl_slippage: float = typer.Option(0.3, help="Stop overshoot in pips"),
+    feed: str = typer.Option("duka", help="duka | yf"),
+    lot: float = typer.Option(0.01, help="Lot size used for the USD column"),
+):
+    """Backtest SCALP_MR across a spread sweep to find the break-even spread.
+
+    A 5-10 pip target lives or dies on cost, so the sweep — not a single
+    optimistic spread — is the decision-grade output.
+    """
+    from fsp.backtest.scalp_engine import (
+        ScalpExecConfig, run_scalp_backtest, pip_pnl,
+    )
+    from fsp.data.feed import default_feed
+
+    pair_list = [p.strip().upper() for p in pairs.split(",") if p.strip()]
+    spread_list = [float(x) for x in spreads.split(",") if x.strip()]
+    s_dt = datetime.fromisoformat(start).replace(tzinfo=timezone.utc)
+    e_dt = datetime.fromisoformat(end).replace(tzinfo=timezone.utc)
+
+    f = default_feed(feed)
+    bars: dict[str, object] = {}
+    for pair in pair_list:
+        print(f"[dim]loading {pair} M5 …[/]")
+        bars[pair] = f.history(pair, "M5", s_dt - timedelta(days=4), e_dt)
+
+    print(f"\n[cyan]SCALP_MR[/] {start}→{end} · delay={delay_bars} bars "
+          f"· sl_slip={sl_slippage}p · lot={lot}")
+
+    for spread in spread_list:
+        cfg = ScalpExecConfig(spread_pips=spread, sl_slippage_pips=sl_slippage,
+                              entry_delay_bars=delay_bars)
+        n = wins = 0
+        total_r = 0.0
+        total_pips = 0.0
+        per_pair: dict[str, tuple[int, float]] = {}
+        for pair in pair_list:
+            res = run_scalp_backtest(pair, s_dt, e_dt, feed_kind=feed, cfg=cfg,
+                                     m5=bars[pair])
+            pip = 0.01 if "JPY" in pair else 0.0001
+            closed = [t for t in res.trades if t.outcome != "eop"]
+            pr = sum(t.weighted_r for t in closed)
+            per_pair[pair] = (len(closed), pr)
+            n += len(closed)
+            wins += sum(1 for t in closed if t.weighted_r > 0)
+            total_r += pr
+            total_pips += sum(pip_pnl(t, pip) for t in closed)
+
+        if n == 0:
+            print(f"\n[bold]spread {spread:.1f}p[/] — no trades")
+            continue
+        # 0.01 lot = $0.10 per pip on a USD-quoted pair (approx for JPY too).
+        usd = total_pips * lot * 10
+        print(f"\n[bold]spread {spread:.1f}p[/] — {n} trades")
+        print(f"  Win rate:    {wins / n * 100:.1f}%  ({wins}/{n})")
+        print(f"  Expectancy:  {total_r / n:+.3f}R / trade")
+        print(f"  Total:       {total_r:+.1f}R   {total_pips:+.0f} pips   "
+              f"~${usd:+.2f} at {lot} lots")
+        worst = sorted(per_pair.items(), key=lambda kv: kv[1][1])
+        print("  By pair:     " + "  ".join(
+            f"{k}={v[1]:+.0f}R/{v[0]}" for k, v in worst))
+
+
 @app.command("resolve-outcomes")
 def resolve_outcomes_cmd(
     verbose: bool = typer.Option(True, help="Print each resolved signal"),
