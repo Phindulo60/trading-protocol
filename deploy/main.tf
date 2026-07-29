@@ -70,6 +70,11 @@ variable "fsp_execute_max_lot" {
   default = "0.10"
 }
 
+variable "fsp_execute_strategies" {
+  type    = string
+  default = "" # empty = all strategies; csv to restrict (e.g. "SCALP_MR")
+}
+
 variable "pairs" {
   # All 7 majors — multi-pair expansion June 2026
   # Backtest (12mo): +1,159R total across both strategies on all pairs
@@ -341,6 +346,7 @@ resource "aws_ecs_task_definition" "fsp" {
       { name = "SUPABASE_URL", value = var.supabase_url },
       { name = "FSP_EXECUTE", value = var.fsp_execute },
       { name = "FSP_EXECUTE_MAX_LOT", value = var.fsp_execute_max_lot },
+      { name = "FSP_EXECUTE_STRATEGIES", value = var.fsp_execute_strategies },
     ]
 
     secrets = [
