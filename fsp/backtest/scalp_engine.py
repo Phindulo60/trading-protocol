@@ -45,6 +45,12 @@ class ScalpExecConfig:
     max_hold_bars: int = 3
     cooldown_bars: int = 2
     entry_delay_bars: int = 0
+    # Geometry override: re-anchor TP/SL at fixed pip distances from the entry,
+    # keeping the entry trigger untouched. Sweeping this separates the value of
+    # the *signal* from the value of the *exit geometry* -- and shows what a
+    # given win rate actually costs.
+    tp_pips: float = 0.0
+    sl_pips: float = 0.0
 
 
 def _pip(pair: str) -> float:
@@ -90,7 +96,18 @@ def _update(t: Trade, bar, bar_ts: pd.Timestamp,
         _close_trade(t, "timeout", close, bar_ts, cfg, pip)
 
 
-def _is_stale(sig, price: float) -> bool:
+def _levels(sig, cfg: ScalpExecConfig, pip: float) -> tuple[float, float]:
+    """(sl, tp1) for a signal, applying any geometry override."""
+    if cfg.tp_pips <= 0 and cfg.sl_pips <= 0:
+        return sig.sl, sig.tp1
+    sl_d = (cfg.sl_pips or abs(sig.entry - sig.sl) / pip) * pip
+    tp_d = (cfg.tp_pips or abs(sig.tp1 - sig.entry) / pip) * pip
+    if sig.direction == "long":
+        return sig.entry - sl_d, sig.entry + tp_d
+    return sig.entry + sl_d, sig.entry - tp_d
+
+
+def _is_stale(sig, price: float, sl: float, tp1: float) -> bool:
     """True if the market has already left the signal's SL..TP window.
 
     With ``entry_delay_bars`` the fill lands several bars after the scan, and
@@ -101,15 +118,18 @@ def _is_stale(sig, price: float) -> bool:
     missed trade into a phantom profit.
     """
     if sig.direction == "long":
-        return not (sig.sl < price < sig.tp1)
-    return not (sig.tp1 < price < sig.sl)
+        return not (sl < price < tp1)
+    return not (tp1 < price < sl)
 
 
 def _enter(sig, ts: pd.Timestamp, bar_close: float,
-           cfg: ScalpExecConfig, pip: float) -> Trade:
+           cfg: ScalpExecConfig, pip: float,
+           sl: float | None = None, tp1: float | None = None) -> Trade:
     """Market entry at the close of the fill bar, paying half the spread."""
     half = cfg.spread_pips * pip / 2
     fill = bar_close + half if sig.direction == "long" else bar_close - half
+    sl = sig.sl if sl is None else sl
+    tp1 = sig.tp1 if tp1 is None else tp1
     t = Trade(
         open_ts=ts.to_pydatetime(),
         close_ts=None,
@@ -118,8 +138,8 @@ def _enter(sig, ts: pd.Timestamp, bar_close: float,
         grade=sig.strategy,
         entry=sig.entry,
         fill=fill,
-        sl=sig.sl,
-        tp1=sig.tp1,
+        sl=sl,
+        tp1=tp1,
         tp2=None,
         risk_r=sig.risk_r,
         rr_tp1=sig.rr_tp1,
@@ -186,8 +206,9 @@ def run_scalp_backtest(
             sig = pending[1]
             pending = None
             px = float(bar["close"])
-            if open_trade is None and not _is_stale(sig, px):
-                open_trade = _enter(sig, ts, px, cfg, pip)
+            sl, tp1 = _levels(sig, cfg, pip)
+            if open_trade is None and not _is_stale(sig, px, sl, tp1):
+                open_trade = _enter(sig, ts, px, cfg, pip, sl, tp1)
                 continue
 
         if open_trade is not None or pending is not None:
@@ -213,7 +234,8 @@ def run_scalp_backtest(
         n_fired += 1
 
         if cfg.entry_delay_bars <= 0:
-            open_trade = _enter(sig, ts, float(bar["close"]), cfg, pip)
+            sl, tp1 = _levels(sig, cfg, pip)
+            open_trade = _enter(sig, ts, float(bar["close"]), cfg, pip, sl, tp1)
         else:
             pending = (i + cfg.entry_delay_bars, sig)
 

@@ -191,9 +191,9 @@ def test_stale_signal_beyond_sl_is_dropped_not_filled():
         inv_pips=10.0, rr_tp1=1.0, rr_tp2=None, risk_r=1.0,
         note="", ts=TS.isoformat(), context={},
     )
-    assert _is_stale(long_sig, 1.0985)        # already through the stop
-    assert _is_stale(long_sig, 1.1015)        # already through the target
-    assert not _is_stale(long_sig, 1.1002)
+    assert _is_stale(long_sig, 1.0985, 1.0990, 1.1010)   # through the stop
+    assert _is_stale(long_sig, 1.1015, 1.0990, 1.1010)   # through the target
+    assert not _is_stale(long_sig, 1.1002, 1.0990, 1.1010)
 
     short_sig = Signal(
         strategy="SCALP_MR", pair="EURUSD", direction="short",
@@ -201,7 +201,52 @@ def test_stale_signal_beyond_sl_is_dropped_not_filled():
         inv_pips=10.0, rr_tp1=1.0, rr_tp2=None, risk_r=1.0,
         note="", ts=TS.isoformat(), context={},
     )
-    assert _is_stale(short_sig, 1.1015)
-    assert _is_stale(short_sig, 1.0985)
-    assert not _is_stale(short_sig, 1.0998)
+    assert _is_stale(short_sig, 1.1015, 1.1010, 1.0990)
+    assert _is_stale(short_sig, 1.0985, 1.1010, 1.0990)
+    assert not _is_stale(short_sig, 1.0998, 1.1010, 1.0990)
 
+
+
+def test_geometry_override_reanchors_tp_and_sl():
+    """The override must re-anchor both levels on the signal's entry, leaving
+    the entry trigger itself untouched."""
+    from fsp.backtest.scalp_engine import _levels
+
+    long_sig = Signal(
+        strategy="SCALP_MR", pair="EURUSD", direction="long",
+        entry=1.1000, sl=1.0990, tp1=1.1010, tp2=None,
+        inv_pips=10.0, rr_tp1=1.0, rr_tp2=None, risk_r=1.0,
+        note="", ts=TS.isoformat(), context={},
+    )
+    cfg = ScalpExecConfig(tp_pips=2, sl_pips=12)
+    sl, tp1 = _levels(long_sig, cfg, PIP)
+    assert sl == pytest.approx(1.1000 - 12 * PIP)
+    assert tp1 == pytest.approx(1.1000 + 2 * PIP)
+
+    short_sig = Signal(
+        strategy="SCALP_MR", pair="EURUSD", direction="short",
+        entry=1.1000, sl=1.1010, tp1=1.0990, tp2=None,
+        inv_pips=10.0, rr_tp1=1.0, rr_tp2=None, risk_r=1.0,
+        note="", ts=TS.isoformat(), context={},
+    )
+    sl, tp1 = _levels(short_sig, cfg, PIP)
+    assert sl == pytest.approx(1.1000 + 12 * PIP)
+    assert tp1 == pytest.approx(1.1000 - 2 * PIP)
+
+    # No override => signal levels pass through untouched.
+    assert _levels(long_sig, ScalpExecConfig(), PIP) == (1.0990, 1.1010)
+
+
+def test_tighter_target_buys_a_higher_win_rate():
+    """First-passage invariant: moving the target closer and the stop further
+    away must raise the win rate. Whether that win rate is *profitable* is an
+    empirical question for the real tape, not something to assert here."""
+    df = _spike_series()
+    s, e = df.index[0].to_pydatetime(), df.index[-1].to_pydatetime()
+    base = ScalpExecConfig(spread_pips=0.0, sl_slippage_pips=0.0, max_hold_bars=12)
+    symmetric = run_scalp_backtest("EURUSD", s, e, m5=df, cfg=ScalpExecConfig(
+        **{**base.__dict__, "tp_pips": 8, "sl_pips": 8}))
+    skewed = run_scalp_backtest("EURUSD", s, e, m5=df, cfg=ScalpExecConfig(
+        **{**base.__dict__, "tp_pips": 2, "sl_pips": 12}))
+    assert symmetric.stats()["total"] > 10 and skewed.stats()["total"] > 10
+    assert skewed.stats()["win_rate"] > symmetric.stats()["win_rate"]

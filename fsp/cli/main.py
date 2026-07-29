@@ -618,15 +618,21 @@ def scalp_backtest_cmd(
     end: str = typer.Option(..., help="YYYY-MM-DD"),
     spreads: str = typer.Option("0.3,1.0,2.0,3.0",
                                 help="Spread sweep in pips — the break-even test"),
+    geometry: str = typer.Option("", help="TP/SL/hold triples in pips and bars, "
+                                         "e.g. '2/12/3,8/8/6,18/6/24'. "
+                                         "Empty = use the signal's own levels."),
     delay_bars: int = typer.Option(0, help="Feed latency in M5 bars (3 = ~15 min)"),
     sl_slippage: float = typer.Option(0.3, help="Stop overshoot in pips"),
     feed: str = typer.Option("duka", help="duka | yf"),
     lot: float = typer.Option(0.01, help="Lot size used for the USD column"),
 ):
-    """Backtest SCALP_MR across a spread sweep to find the break-even spread.
+    """Backtest SCALP_MR across a spread and/or TP:SL geometry sweep.
 
-    A 5-10 pip target lives or dies on cost, so the sweep — not a single
-    optimistic spread — is the decision-grade output.
+    A 5-10 pip target lives or dies on cost, so the spread sweep — not a
+    single optimistic spread — is the decision-grade output. The geometry
+    sweep holds the entry trigger fixed and re-anchors TP/SL, which separates
+    the value of the signal from the value of the exit geometry and shows what
+    a given win rate actually costs.
     """
     from fsp.backtest.scalp_engine import (
         ScalpExecConfig, run_scalp_backtest, pip_pnl,
@@ -635,6 +641,14 @@ def scalp_backtest_cmd(
 
     pair_list = [p.strip().upper() for p in pairs.split(",") if p.strip()]
     spread_list = [float(x) for x in spreads.split(",") if x.strip()]
+    geoms: list[tuple[float, float, int]] = []
+    for g in (x.strip() for x in geometry.split(",")):
+        if not g:
+            continue
+        tp, sl, hold = g.split("/")
+        geoms.append((float(tp), float(sl), int(hold)))
+    geoms = geoms or [(0.0, 0.0, 3)]
+
     s_dt = datetime.fromisoformat(start).replace(tzinfo=timezone.utc)
     e_dt = datetime.fromisoformat(end).replace(tzinfo=timezone.utc)
 
@@ -647,38 +661,38 @@ def scalp_backtest_cmd(
     print(f"\n[cyan]SCALP_MR[/] {start}→{end} · delay={delay_bars} bars "
           f"· sl_slip={sl_slippage}p · lot={lot}")
 
-    for spread in spread_list:
-        cfg = ScalpExecConfig(spread_pips=spread, sl_slippage_pips=sl_slippage,
-                              entry_delay_bars=delay_bars)
-        n = wins = 0
-        total_r = 0.0
-        total_pips = 0.0
-        per_pair: dict[str, tuple[int, float]] = {}
-        for pair in pair_list:
-            res = run_scalp_backtest(pair, s_dt, e_dt, feed_kind=feed, cfg=cfg,
-                                     m5=bars[pair])
-            pip = 0.01 if "JPY" in pair else 0.0001
-            closed = [t for t in res.trades if t.outcome != "eop"]
-            pr = sum(t.weighted_r for t in closed)
-            per_pair[pair] = (len(closed), pr)
-            n += len(closed)
-            wins += sum(1 for t in closed if t.weighted_r > 0)
-            total_r += pr
-            total_pips += sum(pip_pnl(t, pip) for t in closed)
+    for tp_pips, sl_pips, hold in geoms:
+        geo = ("as signalled" if tp_pips <= 0 and sl_pips <= 0
+               else f"TP{tp_pips:g}p / SL{sl_pips:g}p (1:{tp_pips / sl_pips:.2g})")
+        print(f"\n[bold magenta]── {geo}, hold {hold} bars ──[/]")
+        for spread in spread_list:
+            cfg = ScalpExecConfig(
+                spread_pips=spread, sl_slippage_pips=sl_slippage,
+                entry_delay_bars=delay_bars, max_hold_bars=hold,
+                tp_pips=tp_pips, sl_pips=sl_pips,
+            )
+            n = wins = 0
+            total_r = 0.0
+            total_pips = 0.0
+            for pair in pair_list:
+                res = run_scalp_backtest(pair, s_dt, e_dt, feed_kind=feed,
+                                         cfg=cfg, m5=bars[pair])
+                pip = 0.01 if "JPY" in pair else 0.0001
+                closed = [t for t in res.trades if t.outcome != "eop"]
+                n += len(closed)
+                wins += sum(1 for t in closed if t.weighted_r > 0)
+                total_r += sum(t.weighted_r for t in closed)
+                total_pips += sum(pip_pnl(t, pip) for t in closed)
 
-        if n == 0:
-            print(f"\n[bold]spread {spread:.1f}p[/] — no trades")
-            continue
-        # 0.01 lot = $0.10 per pip on a USD-quoted pair (approx for JPY too).
-        usd = total_pips * lot * 10
-        print(f"\n[bold]spread {spread:.1f}p[/] — {n} trades")
-        print(f"  Win rate:    {wins / n * 100:.1f}%  ({wins}/{n})")
-        print(f"  Expectancy:  {total_r / n:+.3f}R / trade")
-        print(f"  Total:       {total_r:+.1f}R   {total_pips:+.0f} pips   "
-              f"~${usd:+.2f} at {lot} lots")
-        worst = sorted(per_pair.items(), key=lambda kv: kv[1][1])
-        print("  By pair:     " + "  ".join(
-            f"{k}={v[1]:+.0f}R/{v[0]}" for k, v in worst))
+            if n == 0:
+                print(f"  spread {spread:.1f}p — no trades")
+                continue
+            # 0.01 lot ~= $0.10 per pip.
+            usd = total_pips * lot * 10
+            print(f"  spread {spread:.1f}p  n={n:<5d} "
+                  f"WR={wins / n * 100:5.1f}%  "
+                  f"exp={total_r / n:+.3f}R  "
+                  f"{total_pips:+8.0f} pips  ${usd:+9.2f}")
 
 
 @app.command("resolve-outcomes")
