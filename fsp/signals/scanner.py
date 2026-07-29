@@ -180,13 +180,17 @@ def scan_all(pair: str,
     except Exception:
         log.exception("ASIA_HL scan failed for %s", pair)
 
-    # 4. ECM (legacy — still firing, break-even)
-    try:
-        sig = scan_momentum(pair, m15_df, h1_df, daily_df)
-        if sig is not None:
-            signals.append(sig)
-    except Exception:
-        log.exception("ECM scan failed for %s", pair)
+    # 4. ECM DISABLED — non-profitable in live forward test (Jul 2–29 2026):
+    #    179 resolved trades | WR=21.8% | Exp=-0.213R | netR=-38.1R | PF=0.65.
+    #    EMA-cross momentum shows no edge on this pair set — retiring to stop the
+    #    bleed. Code retained in fsp/signals/momentum.py; skipped in scan_all
+    #    (same treatment as ARB above).
+    # try:
+    #     sig = scan_momentum(pair, m15_df, h1_df, daily_df)
+    #     if sig is not None:
+    #         signals.append(sig)
+    # except Exception:
+    #     log.exception("ECM scan failed for %s", pair)
 
     # 5. SCALP_MR — M5 Bollinger Band mean-reversion scalper
     try:
