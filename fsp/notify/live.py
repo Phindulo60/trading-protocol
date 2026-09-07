@@ -13,6 +13,7 @@ from fsp.data.types import Grade
 from fsp.grader.setup import grade_setup, SetupCandidate
 from fsp.journal.db import (
     last_signal_dedup_key, log_signal, log_intraday_signal, update_features,
+    get_marker, set_marker,
 )
 from fsp.notify.config import load as load_cfg, parse_chat_ids
 from fsp.notify.chat import ChatHandler
@@ -237,8 +238,10 @@ async def live_loop(pairs: list[str], ltf: str, feed_kind: str,
         print("[dim]Running: 4-Step Protocol grader + intraday scanner[/]")
 
     cycle = 0
-    last_report_date: str | None = None
-    last_calendar_date: str | None = None
+    # Load once-per-day send markers from durable storage so a crash/watchdog
+    # restart loop cannot re-fire the daily report / calendar brief every boot.
+    last_report_date: str | None = get_marker("daily_report_sent")
+    last_calendar_date: str | None = get_marker("calendar_sent")
     last_resolve_at: datetime | None = None
     resolve_task: asyncio.Task | None = None
 
@@ -274,6 +277,7 @@ async def live_loop(pairs: list[str], ltf: str, feed_kind: str,
                 )
                 if ok:
                     last_report_date = t0.strftime("%Y-%m-%d")
+                    set_marker("daily_report_sent", last_report_date)
                     print(f"[green]📊 Daily report sent at {t0:%H:%M} UTC[/]")
                 else:
                     print(f"[yellow]⚠ Daily report send failed (will retry next cycle)[/]")
@@ -287,6 +291,7 @@ async def live_loop(pairs: list[str], ltf: str, feed_kind: str,
                 ok = await send_calendar_brief(tg, t0)
                 if ok:
                     last_calendar_date = t0.strftime("%Y-%m-%d")
+                    set_marker("calendar_sent", last_calendar_date)
                     print(f"[green]📅 Calendar brief sent at {t0:%H:%M} UTC[/]")
                 else:
                     print(f"[yellow]⚠ Calendar brief send failed (retry next cycle)[/]")

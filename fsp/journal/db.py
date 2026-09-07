@@ -213,6 +213,28 @@ def update_outcome(signal_id, outcome: str,
         )
 
 
+def get_marker(name: str) -> str | None:
+    """Read a durable key/value marker (survives restarts). SQLite fallback."""
+    b = _backend()
+    if b is not None:
+        return b.get_marker(name)
+    with conn() as c:
+        c.execute("CREATE TABLE IF NOT EXISTS fsp_meta (k TEXT PRIMARY KEY, v TEXT)")
+        row = c.execute("SELECT v FROM fsp_meta WHERE k=?", (name,)).fetchone()
+        return row[0] if row else None
+
+
+def set_marker(name: str, value: str) -> None:
+    """Persist a durable key/value marker. SQLite fallback."""
+    b = _backend()
+    if b is not None:
+        return b.set_marker(name, value)
+    with conn() as c:
+        c.execute("CREATE TABLE IF NOT EXISTS fsp_meta (k TEXT PRIMARY KEY, v TEXT)")
+        c.execute("INSERT INTO fsp_meta (k, v) VALUES (?, ?) "
+                  "ON CONFLICT(k) DO UPDATE SET v=excluded.v", (name, value))
+
+
 def unresolved_signals(strategy: str | None = "TREND_RSI") -> list[dict]:
     """Return all signals without an outcome yet. strategy=None returns all."""
     b = _backend()

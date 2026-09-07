@@ -161,6 +161,20 @@ class DynamoJournal:
             }),
         )
 
+    # ── durable markers (survive container restarts) ──────────────────────────
+
+    def get_marker(self, name: str) -> str | None:
+        """Read a small key/value marker row (PK signal_id = ``__meta__:<name>``).
+
+        Used to remember once-per-day sends (calendar brief, daily report) across
+        restarts, so a crash/watchdog loop cannot re-fire them every boot.
+        """
+        item = self.table.get_item(Key={"signal_id": f"__meta__:{name}"}).get("Item")
+        return item.get("value") if item else None
+
+    def set_marker(self, name: str, value: str) -> None:
+        self.table.put_item(Item={"signal_id": f"__meta__:{name}", "value": value})
+
     # ── queries ──────────────────────────────────────────────────────────────
 
     def last_signal_dedup_key(self, pair: str, minutes: int = 60,
