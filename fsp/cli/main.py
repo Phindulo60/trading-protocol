@@ -305,7 +305,7 @@ def telegram_setup():
 def live_cmd(
     pairs: str = typer.Option("EURUSD,GBPUSD,USDJPY,AUDUSD,USDCAD,EURJPY,GBPJPY", help="Comma-separated"),
     ltf: str = typer.Option("M15"),
-    feed: str = typer.Option("duka", help="duka | yf | td (Twelve Data live)"),
+    feed: str = typer.Option("duka", help="duka | yf | td (Twelve Data live) | mt (MetaApi broker feed)"),
     interval: int = typer.Option(300, help="Seconds between scans (default 5 min)"),
     min_grade: str = typer.Option("B", help="A+ | A | B"),
     equity: float = typer.Option(10_000.0),

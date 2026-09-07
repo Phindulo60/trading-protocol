@@ -218,7 +218,13 @@ def default_feed(kind: str = "duka", **kwargs) -> DataFeed:
             api_key = kwargs.get("api_key") or _load_td_key()
             _feed_cache["td"] = TwelveDataFeed(api_key)
         return _feed_cache["td"]
-    raise ValueError(f"Unknown feed kind: {kind!r}. Use: duka, yf, td")
+    if kind == "mt":
+        # Singleton — shares account/host discovery + short response cache
+        if "mt" not in _feed_cache:
+            from .metaapi import MetaApiFeed
+            _feed_cache["mt"] = MetaApiFeed(**kwargs)
+        return _feed_cache["mt"]
+    raise ValueError(f"Unknown feed kind: {kind!r}. Use: duka, yf, td, mt")
 
 
 def _load_td_key() -> str:

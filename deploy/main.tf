@@ -49,6 +49,23 @@ variable "twelve_data_api_key" {
   default   = "2788e10de579442d9b3f240bf30fd3f3"
 }
 
+# MetaApi broker feed (--feed mt). Token is the same one mt4-executor uses;
+# no default on purpose: pass via terraform.tfvars / TF_VAR_metaapi_token.
+variable "metaapi_token" {
+  type      = string
+  sensitive = true
+}
+
+variable "metaapi_login" {
+  # Broker login used to look the MetaApi account up (TradeNation-LiveBravo)
+  default = "760459"
+}
+
+variable "metaapi_symbol_suffix" {
+  # TradeNation uses bare symbols (verified 2026-09-07: EURUSD works; .pro/m/./.i do not)
+  default = ""
+}
+
 variable "supabase_url" {
   type    = string
   default = ""
@@ -87,7 +104,9 @@ variable "pairs" {
 }
 
 variable "feed" {
-  default = "yf"
+  # mt = MetaApi broker candles (same prices as fills, no cloud-IP throttling).
+  # yf was the previous default; it throttles Fargate IPs and crash-looped the task.
+  default = "mt"
 }
 
 variable "enable_llm" {
@@ -125,6 +144,7 @@ resource "aws_secretsmanager_secret_version" "fsp_secrets" {
     TELEGRAM_CHAT_ID     = var.telegram_chat_id
     TWELVE_DATA_API_KEY  = var.twelve_data_api_key
     SUPABASE_SERVICE_KEY = var.supabase_service_key
+    METAAPI_TOKEN        = var.metaapi_token
   })
 }
 
@@ -353,6 +373,8 @@ resource "aws_ecs_task_definition" "fsp" {
       { name = "FSP_EXECUTE_MAX_LOT", value = var.fsp_execute_max_lot },
       { name = "FSP_EXECUTE_STRATEGIES", value = var.fsp_execute_strategies },
       { name = "FSP_EXECUTE_MIN_EQUITY", value = var.fsp_execute_min_equity },
+      { name = "METAAPI_LOGIN", value = var.metaapi_login },
+      { name = "METAAPI_SYMBOL_SUFFIX", value = var.metaapi_symbol_suffix },
     ]
 
     secrets = [
@@ -360,6 +382,7 @@ resource "aws_ecs_task_definition" "fsp" {
       { name = "TELEGRAM_CHAT_ID", valueFrom = "${aws_secretsmanager_secret.fsp_secrets.arn}:TELEGRAM_CHAT_ID::" },
       { name = "TWELVE_DATA_API_KEY", valueFrom = "${aws_secretsmanager_secret.fsp_secrets.arn}:TWELVE_DATA_API_KEY::" },
       { name = "SUPABASE_SERVICE_KEY", valueFrom = "${aws_secretsmanager_secret.fsp_secrets.arn}:SUPABASE_SERVICE_KEY::" },
+      { name = "METAAPI_TOKEN", valueFrom = "${aws_secretsmanager_secret.fsp_secrets.arn}:METAAPI_TOKEN::" },
     ]
 
     logConfiguration = {
