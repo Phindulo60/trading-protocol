@@ -50,3 +50,30 @@ see whether *entries* have edge even though *forecasting* does not.
 `data.py` loaders · `features.py` features/labels · `evaluate.py` walk-forward + NW stats + baselines ·
 `run_h1.py`, `run_daily.py` model sweeps · `diagnostics.py` seasonality + HAR-RV · `session_drift.py` ·
 `vol_target.py` · tests `fsp/tests/test_gold_research.py`
+
+## Addendum 2026-09-09: literature replication + the "$50/week on $500" question
+
+Target = +10%/week = 14,000%/yr compounded. To *expect* that at Sharpe 1.1 you must run 66% weekly
+vol, i.e. an 18% chance per week of losing half the account. At Sharpe 3 it is still 24% weekly vol.
+
+**arXiv 2511.08571 "Forecast-to-Fill"** (Sharpe 2.88 on gold, EMA-slope + 50d momentum regime,
+15% vol target, 0.4 Kelly, ATR stops). Replicated in `replicate_f2f.py` on Dukascopy daily, rolling
+10y/6m walk-forward, both the paper's 0.7 bps and our observed 2.4 bps cost, lambda swept 0.90/0.94/0.97:
+Sharpe **0.6–1.05**, beta to gold **0.5–0.7** (paper: 0.03), hit 53% (paper: 65.8%), 2025 alone is most
+of the return. Does not replicate; it is buy-and-hold gold with a stop. Not peer-reviewed; discard.
+
+**Baltussen, Da, Lammers, Martens (JFE 2021) intraday momentum** (day-to-date return predicts the last
+30–60 min before COMEX settle). `intraday_mom.py` on M15 2022+ and H1 2017+: rho 0.00–0.03, gross
+≈ 0, **net −1.4 to −1.9 bps/day, negative every year 2017–2026**. Dead in gold at retail cost.
+
+**Leverage on the one thing that works** (`leverage_sim.py`, block-bootstrap of real OOS
+HAR-vol-target daily returns, $500 account, TradeNation 0.01 lot = 1 oz = $4,411 notional):
+
+| position | leverage | P(week ≥ +$50) | median week | P(ruin ≤ 12 wk) | P(ruin ≤ 52 wk) | median equity @ 52 wk |
+|---|---|---|---|---|---|---|
+| 0.01 lot (minimum) | 8.8x | 33% | +$5 | **22%** | **50%** | $790 |
+| 0.02 lot (max margin) | 17.6x | 36% | +$1 | 60% | 89% | $15 |
+
+On $500, the *smallest* gold position the broker allows already forces ~9x leverage; a coin-flip of
+ruin inside a year is structural, not a modelling choice. The strategy is sound; the account is too
+small for the instrument.
