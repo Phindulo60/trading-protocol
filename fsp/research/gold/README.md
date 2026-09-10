@@ -77,3 +77,33 @@ HAR-vol-target daily returns, $500 account, TradeNation 0.01 lot = 1 oz = $4,411
 On $500, the *smallest* gold position the broker allows already forces ~9x leverage; a coin-flip of
 ruin inside a year is structural, not a modelling choice. The strategy is sound; the account is too
 small for the instrument.
+
+## Addendum 2026-09-10: ICT concepts on gold — the first real edge
+
+Ported the ICT confluence engine (`fsp/ict/`) to XAUUSD. The FX-tuned version lost -0.5R/trade
+because its stops ($2/oz) sit inside gold's $4-8 bar noise. Fix = ATR-buffered stops (0.5 ATR
+beyond the swept level) + a min-risk filter (>=0.5 ATR) so the $0.30 spread stays <10% of risk.
+`ict_run.py` (gold-correct pip=0.01 via `data.types.pip_size`), Dukascopy mid, spread 30pt.
+
+**Backtests (walk-forward, limit fills, SL slippage, one position at a time):**
+- H1/H4 2017-2026, 216 trades: ALL +0.125R (t=1.0). Grade is MONOTONIC and predictive:
+  B -0.45R / A +0.31R / A+ +1.24R. **A/A+ only = +0.449R, t=2.67, DD -10R**, stable OOS
+  (2017-22 +0.185R, 2023-26 +0.772R). 3R TP cap HURTS (+0.03 vs +0.13) -> let winners run.
+- M15/H1 2022-2026, 473 trades: +0.205R (t=2.23). Grade non-monotonic (noise); the robust cut
+  is **session**: NY (AM+PM) = +0.467R, t=2.99, n=212, positive every sub-period.
+- **COMBINED stream** (H1 A/A+ all-session + M15 NY A/A+): n=286, **+0.363R, t=3.19**, ~30 trades/yr,
+  only 2020 negative, late-sample stronger than early. This is the deployable edge.
+
+**Sizing = `sizing.py`**: fixed-fraction of CURRENT equity, snapped to 0.01 lot grid, capped 0.10,
+margin-checked, risk halved after 15% drawdown. Block-bootstrap MC, $1000 account, combined stream:
+
+| risk | 1yr median | 3yr median | P(profit 3yr) | P(2x 3yr) | P(blow-up) | worst DD |
+|---|---|---|---|---|---|---|
+| 1% | $1,089 | $1,323 (+32%) | 96% | 1% | 0% | -8% |
+| 2% | $1,177 | $1,608 (+61%) | 95% | 19% | 0% | -13% |
+| 3% | $1,207 | $1,711 (+71%) | 84%/96% | 30% | 0% | -17% |
+
+**Verdict:** ICT on gold is a genuine, robust, non-blowup growth engine (~15-70%/yr by risk
+appetite). It is NOT a weekly-income engine: ~30 A/A+ setups a year at +0.36R is ~$2-5/week on
+$1000. Weekly income needs frequency this doesn't have or leverage that ruins the account.
+Deploy for compounding, not for a weekly wage.

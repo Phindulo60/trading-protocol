@@ -23,6 +23,7 @@ from fsp.ict.engine import decide, TradeDecision
 from fsp.ict.smt import partner_for
 from fsp.context.sessions import session_of
 from fsp.data.feed import default_feed
+from fsp.data.types import pip_size
 
 GRADE_RANK = {"B": 1, "A": 2, "A+": 3}
 
@@ -55,7 +56,7 @@ def simulate_ict(
 ) -> BacktestResult:
     """Replay `ltf_df` bar-by-bar; open at most one ICT trade at a time."""
     cfg = exec_cfg or ExecConfig(partial_pct=1.0, min_rr_tp1=1.5)
-    pip = 0.01 if "JPY" in pair else 0.0001
+    pip = pip_size(pair)
     min_rank = GRADE_RANK.get(min_grade, 2)
 
     result = BacktestResult(

@@ -95,3 +95,14 @@ def candles_to_df(candles: list[Candle]) -> pd.DataFrame:
         [(c.ts, c.o, c.h, c.l, c.c, c.v) for c in candles],
         columns=["ts", "open", "high", "low", "close", "volume"],
     ).set_index("ts")
+
+
+def pip_size(pair: str) -> float:
+    """Price increment used for spread/slippage arithmetic.
+
+    FX majors 0.0001, JPY crosses 0.01, gold (XAU) 0.01 = one 'point' ($0.01/oz):
+    TradeNation quotes XAUUSD to 2dp with a ~0.28-0.30 spread, so spread_pips=30.
+    """
+    if pair.upper().startswith("XAU"):
+        return 0.01
+    return 0.01 if "JPY" in pair.upper() else 0.0001
